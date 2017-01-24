@@ -11,6 +11,8 @@ Author: Maxime Vincent, Daniele Lacamera
 
 #include <stdint.h>
 #include <signal.h>
+
+#ifdef CONFIG_PICOTCP
 #include "pico_defines.h"
 #include "pico_constants.h"
 #include "pico_config.h"
@@ -21,6 +23,7 @@ Author: Maxime Vincent, Daniele Lacamera
 #include "pico_ipv6.h"
 #include "pico_dns_client.h"
 #include "pico_socket.h"
+#endif
 
 #define SOCKSIZE  16
 #define SOCKSIZE6 28
@@ -31,8 +34,8 @@ extern void   *pico_signal_tick;
 
 
 typedef int socklen_t;
-#define AF_INET     (PICO_PROTO_IPV4)
-#define AF_INET6    (PICO_PROTO_IPV6)
+#define AF_INET     (2)
+#define AF_INET6    (10)
 #define SOL_SOCKET (0x80)
 
 #define IP_MULTICAST_LOOP   (PICO_IP_MULTICAST_LOOP)
@@ -46,6 +49,7 @@ typedef int socklen_t;
 #define TCP_KEEPCNT         (PICO_SOCKET_OPT_KEEPCNT)
 #define TCP_KEEPIDLE        (PICO_SOCKET_OPT_KEEPIDLE)
 #define TCP_KEEPINTVL       (PICO_SOCKET_OPT_KEEPINTVL)
+#define TCP_LINGER          (PICO_SOCKET_OPT_LINGER)
 #define SO_ERROR            (4103)
 #define SO_REUSEADDR        (2)
 #define sockopt_get_name(x) ((x))
@@ -91,8 +95,8 @@ struct addrinfo {
     int              ai_socktype;
     int              ai_protocol;
     socklen_t        ai_addrlen;
-    struct sockaddr *ai_addr;
     char            *ai_canonname;
+    struct sockaddr *ai_addr;
     struct addrinfo *ai_next;
 };
 
@@ -158,30 +162,6 @@ struct timezone {
     #define SO_REUSEPORT    (15)
 #endif
 
-#ifndef FD_CLOEXEC
-    #define FD_CLOEXEC	1
-#endif
-
-#ifndef F_DUPFD
-    #define F_DUPFD 0
-#endif
-
-#ifndef F_GETFD
-    #define F_GETFD 1
-#endif
-
-#ifndef F_SETFD
-    #define F_SETFD 2 
-#endif
-
-#ifndef F_GETFL
-    #define F_GETFL 3
-#endif
-
-#ifndef F_SETFL
-    #define F_SETFL 4
-#endif
-
 
 #ifndef O_NONBLOCK
     #define O_NONBLOCK  0x4000
@@ -212,5 +192,9 @@ struct timezone {
         uint16_t revents;
     };
 #endif
+
+void pico_lock(void);
+void pico_unlock(void);
+void socket_in_init(void);
 
 #endif /* PICO_BSD_SOCKETS_H_ */

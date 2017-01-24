@@ -13,9 +13,6 @@
 syscalls = [
     ["sleep", 1, "sys_sleep_hdlr"],
     ["suspend", 1, "sys_suspend_hdlr"],
-    ["thread_create", 3, "sys_thread_create_hdlr"],
-    ["thread_join", 2, "sys_thread_join_hdlr"],
-    ["test", 5, "sys_test_hdlr"],
     ["getpid", 0, "sys_getpid_hdlr"],
     ["getppid", 0, "sys_getppid_hdlr"],
     ["open", 3, "sys_open_hdlr"],
@@ -32,7 +29,7 @@ syscalls = [
     ["realloc", 2, "sys_realloc_hdlr"],
     ["opendir", 1, "sys_opendir_hdlr"],
     ["readdir", 2, "sys_readdir_hdlr"],
-    ["closedir",1, "sys_closedir_hdlr"], 
+    ["closedir",1, "sys_closedir_hdlr"],
     ["stat", 2, "sys_stat_hdlr"],
     ["poll", 3, "sys_poll_hdlr"],
     ["ioctl", 3, "sys_ioctl_hdlr"],
@@ -64,8 +61,7 @@ syscalls = [
     ["kill", 2, "sys_kill_hdlr"],
     ["isatty", 1, "sys_isatty_hdlr"],
     ["exec", 2, "sys_exec_hdlr"],
-    ["execb", 2, "sys_execb_hdlr"],
-    ["ttyname_r", 3, "sys_ttyname_hdlr"],  
+    ["ttyname_r", 3, "sys_ttyname_hdlr"],
     ["exit", 1, "sys_exit_hdlr"],
     ["tcsetattr", 3, "sys_tcsetattr_hdlr"],
     ["tcgetattr", 2, "sys_tcgetattr_hdlr"],
@@ -76,7 +72,35 @@ syscalls = [
     ["sigsuspend", 1, "sys_sigsuspend_hdlr"],
     ["vfork", 0, "sys_vfork_hdlr"],
     ["waitpid", 3, "sys_waitpid_hdlr"],
-    ["lstat", 2, "sys_lstat_hdlr"]
+    ["lstat", 2, "sys_lstat_hdlr"],
+    ["uname", 1, "sys_uname_hdlr"],
+    ["getaddrinfo", 4, "sys_getaddrinfo_hdlr"],
+    ["freeaddrinfo", 1, "sys_freeaddrinfo_hdlr"],
+    ["fstat", 2, "sys_fstat_hdlr"],
+    ["getsockname", 2, "sys_getsockname_hdlr"],
+    ["getpeername", 2, "sys_getpeername_hdlr"],
+    ["readlink", 3, "sys_readlink_hdlr"],
+    ["fcntl", 3, "sys_fcntl_hdlr"],
+    ["setsid", 0, "sys_setsid_hdlr"],
+    ["ptrace", 4, "sys_ptrace_hdlr"],
+    ["reboot", 0, "sys_reboot_hdlr"],
+    ["getpriority", 2, "sys_getpriority_hdlr"],
+    ["setpriority", 3, "sys_setpriority_hdlr"],
+    ["ftruncate", 2, "sys_ftruncate_hdlr"],
+    ["truncate", 2, "sys_truncate_hdlr"],
+    ["pthread_create", 4, "sys_pthread_create_hdlr"],
+    ["pthread_exit", 1, "sys_pthread_exit_hdlr"],
+    ["pthread_join", 2, "sys_pthread_join_hdlr"],
+    ["pthread_detach", 1, "sys_pthread_detach_hdlr"],
+    ["pthread_cancel", 1, "sys_pthread_cancel_hdlr"],
+    ["pthread_self", 0, "sys_pthread_self_hdlr"],
+    ["pthread_setcancelstate", 2, "sys_pthread_setcancelstate_hdlr"],
+    ["sched_yield", 0, "sys_sched_yield_hdlr"],
+    ["pthread_mutex_init", 2, "sys_pthread_mutex_init_hdlr"],
+    ["pthread_mutex_destroy", 1, "sys_pthread_mutex_destroy_hdlr"],
+    ["pthread_mutex_lock", 1, "sys_pthread_mutex_lock_hdlr"],
+    ["pthread_mutex_trylock", 1, "sys_pthread_mutex_trylock_hdlr"],
+    ["pthread_mutex_unlock", 1, "sys_pthread_mutex_unlock_hdlr"],
 ]
 
    #
@@ -84,13 +108,13 @@ syscalls = [
  #####
 #######
 #################################################################
-hdr = open("include/syscall_table.h", "w")
-usercode = open("frosted-mini-userspace/libfrosted/syscall_table.c", "w")
+hdr = open("kernel/frosted-headers/include/sys/frosted.h", "w")
+usercode = open("kernel/frosted-headers/sys/frosted_syscalls.c", "w")
 code = open("kernel/syscall_table.c", "w")
 
-hdr.write("/* The file syscall_table.h is auto generated. DO NOT EDIT, CHANGES WILL BE LOST. */\n/* If you want to add syscalls, use syscall_table_gen.py  */\n\n")
-usercode.write("/* The file syscall_table.c is auto generated. DO NOT EDIT, CHANGES WILL BE LOST. */\n/* If you want to add syscalls, use syscall_table_gen.py  */\n\n#include <stdint.h>\n#include \"syscall_table.h\"\n")
-code.write("/* The file syscall_table.c is auto generated. DO NOT EDIT, CHANGES WILL BE LOST. */\n/* If you want to add syscalls, use syscall_table_gen.py  */\n\n#include \"frosted.h\"\n#include \"syscall_table.h\"\n")
+hdr.write("/* The file frosted.h is auto generated. DO NOT EDIT, CHANGES WILL BE LOST. */\n/* If you want to add syscalls, use syscall_table_gen.py  */\n\n")
+usercode.write("/* The file frosted_syscalls.c is auto generated. DO NOT EDIT, CHANGES WILL BE LOST. */\n/* If you want to add syscalls, use syscall_table_gen.py  */\n\n#include <stdint.h>\n#include \"sys/frosted.h\"\n")
+code.write("/* The file syscall_table.c is auto generated. DO NOT EDIT, CHANGES WILL BE LOST. */\n/* If you want to add syscalls, use syscall_table_gen.py  */\n\n#include \"frosted.h\"\n#include \"sys/frosted.h\"\n")
 
 for n in range(len(syscalls)):
     name = syscalls[n][0]

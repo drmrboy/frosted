@@ -1,10 +1,10 @@
-/*  
+/*
  *      This file is part of frosted.
  *
  *      frosted is free software: you can redistribute it and/or modify
- *      it under the terms of the GNU General Public License version 2, as 
+ *      it under the terms of the GNU General Public License version 2, as
  *      published by the Free Software Foundation.
- *      
+ *
  *
  *      frosted is distributed in the hope that it will be useful,
  *      but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,48 +16,56 @@
  *
  *      Authors: Daniele Lacamera, Maxime Vincent
  *
- */  
+ */
 #include "frosted.h"
+#include "unicore-mx/cm3/systick.h"
+
+#define MAX_TASKLETS 64
 
 struct tasklet {
     void (*exe)(void *);
     void *arg;
-    struct tasklet *next;
 };
 
-struct tasklet *tasklet_list_head = NULL;
-struct tasklet *tasklet_list_tail = NULL;
+static struct tasklet tasklet_array[MAX_TASKLETS];
+uint32_t n_tasklets = 0;
+uint32_t max_tasklets = 0;
 
 
 void tasklet_add(void (*exe)(void*), void *arg)
 {
-    struct tasklet *t = kalloc(sizeof(struct tasklet));
-    if  (!t)
-        return;
-    t->exe = exe;
-    t->arg = arg;
-    t->next = NULL;
-    if (!tasklet_list_head) {
-        tasklet_list_head = t;
-        tasklet_list_tail = t;
-    } else {
-        tasklet_list_tail->next = t;
-        tasklet_list_tail = t;
+    int i;
+    if (!task_in_syscall())
+	    irq_off();
+    for (i = 0; i < MAX_TASKLETS; i++) {
+        if (!tasklet_array[i].exe) {
+            tasklet_array[i].exe = exe;
+            tasklet_array[i].arg = arg;
+            n_tasklets++;
+            if (n_tasklets > max_tasklets)
+                max_tasklets = n_tasklets;
+	    if (!task_in_syscall())
+		    irq_on();
+            return;
+        }
     }
+    while(1) { /* Too many tasklets. */; }
+
 }
 
 void check_tasklets(void)
 {
-    struct tasklet *t;
-    while(tasklet_list_head) {
-        t = tasklet_list_head;
-        if (t->exe) {
-            t->exe(t->arg);
+    int i;
+    if (n_tasklets == 0)
+        return;
+    irq_off();
+    for (i = 0; i < MAX_TASKLETS; i++) {
+        if (tasklet_array[i].exe) {
+            tasklet_array[i].exe(tasklet_array[i].arg);
+            tasklet_array[i].exe = NULL;
+            tasklet_array[i].arg = NULL;
+            n_tasklets--;
         }
-        tasklet_list_head = t->next;
-        kfree(t);
-        if (!tasklet_list_head)
-            tasklet_list_tail = NULL;
     }
+    irq_on();
 }
-

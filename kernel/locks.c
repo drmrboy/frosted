@@ -18,37 +18,51 @@
  *
  */  
 #include "frosted.h"
+#include "locks.h"
 
-/* Structures */
-struct semaphore {
-    int value;
-    int listeners;
-    int *listener;
-};
+#define SIGN_MUTEX (0xCAFEC0C0)
+#define SIGN_SEMAP (0xCAFECAFE)
+
+extern int _mutex_lock(void *);
+extern int _mutex_unlock(void *);
+extern int _sem_wait(void *);
+extern int _sem_post(void *);
 
 
 /* Semaphore: internal functions */
 static void _add_listener(sem_t *s)
 {
     int i;
-    int pid = scheduler_get_cur_pid();
-    for (i = 0; i < s->listeners; i++) {
-        if (s->listener[i] == pid)
+    struct task *t = this_task();
+
+    if (s->last >= 0) {
+        if (t == s->listener[s->last])
             return;
     }
-    s->listener = krealloc(s->listener, sizeof(int) * (s->listeners + 1));
-    if (!s->listener)
-        return;
-    s->listener[s->listeners++] = pid;
+
+    for (i = s->last + 1; i < s->listeners; i++) {
+        if (s->listener[i] == NULL) {
+            s->listener[i] = t;
+            s->last = i;
+            return;
+        }
+    }
+    for (i = 0; i < s->last; i++) {
+        if (s->listener[i] == NULL) {
+            s->listener[i] = t;
+            s->last = i;
+            return;
+        }
+    }
 }
 
 static void _del_listener(sem_t *s)
 {
     int i;
-    int pid = scheduler_get_cur_pid();
+    struct task *t = this_task();
     for (i = 0; i < s->listeners; i++) {
-        if (s->listener[i] == pid) {
-            s->listener[i] = -1;
+        if (s->listener[i] == t) {
+            s->listener[i] = NULL;
             return;
         }
     }
@@ -65,9 +79,19 @@ static int sem_spinwait(sem_t *s)
 }
 
 /* Semaphore: API */
+
+int sem_trywait(sem_t *s)
+{
+    if (!s)
+        return -EINVAL;
+    if(_sem_wait(s) != 0)
+        return -EAGAIN;
+    return 0;
+}
+
 int sem_wait(sem_t *s)
 {
-    if (scheduler_get_cur_pid() == 0)
+    if (this_task() == NULL)
         return sem_spinwait(s);
     if (!s)
         return -EINVAL;
@@ -87,10 +111,18 @@ int sem_post(sem_t *s)
         return -EINVAL;
     if (_sem_post(s) > 0) {
         int i;
-        for(i = 0; i < s->listeners; i++) {
-            int pid = s->listener[i];
-            if (pid >= 0) {
-                task_resume(pid);
+        for(i = s->last+1; i < s->listeners; i++) {
+            struct task *t = s->listener[i];
+            if (t) {
+                task_resume_lock(t);
+                s->listener[i] = NULL;
+            }
+        }
+        for(i = 0; i <= s->last; i++) {
+            struct task *t = s->listener[i];
+            if (t) {
+                task_resume_lock(t);
+                s->listener[i] = NULL;
             }
         }
     }
@@ -109,9 +141,15 @@ sem_t *sem_init(int val)
 {
     sem_t *s = kalloc(sizeof(sem_t));
     if (s) {
+        int i;
+        s->signature = SIGN_SEMAP;
         s->value = val;
-        s->listeners = 0;
-        s->listener = NULL;
+        s->listeners = 8;
+        s->last = -1;
+        s->listener = kalloc(sizeof(struct task *) * (s->listeners + 1));
+        for (i = 0; i < s->listeners; i++)
+            s->listener[i] = NULL;
+
     }
     return s;
 }
@@ -124,39 +162,66 @@ int sys_sem_init_hdlr(int arg1, int arg2, int arg3, int arg4, int arg5)
 
 int sys_sem_post_hdlr(int arg1, int arg2, int arg3, int arg4, int arg5)
 {
+    struct semaphore *s = (struct semaphore *)arg1;
+    if (!s || s->signature != SIGN_SEMAP)
+        return -EACCES;
     return sem_post((sem_t *)arg1);
 }
 
 int sys_sem_wait_hdlr(int arg1, int arg2, int arg3, int arg4, int arg5)
 {
+    struct semaphore *s = (struct semaphore *)arg1;
+    if (!s || s->signature != SIGN_SEMAP)
+        return -EACCES;
     return sem_wait((sem_t *)arg1);
 }
 
 int sys_sem_destroy_hdlr(int arg1, int arg2, int arg3, int arg4, int arg5)
 {
+    struct semaphore *s = (struct semaphore *)arg1;
+    if (!s || s->signature != SIGN_SEMAP)
+        return -EACCES;
     return sem_destroy((sem_t *)arg1);
 }
 
-/* Mutex: API */
-frosted_mutex_t *frosted_mutex_init()
+int suspend_on_sem_wait(sem_t *s)
 {
-    frosted_mutex_t *s = kalloc(sizeof(frosted_mutex_t));
+    int ret;
+    if (!s)
+        return -EINVAL;
+    ret = _sem_wait(s);
+    if (ret != 0) {
+        _add_listener(s);
+        return EAGAIN;
+    }
+    return 0;
+}
+
+/* Mutex: API */
+mutex_t *mutex_init()
+{
+    mutex_t *s = kalloc(sizeof(mutex_t));
     if (s) {
+        int i;
+        s->signature = SIGN_MUTEX;
         s->value = 1; /* Unlocked. */
-        s->listeners = 0;
-        s->listener = NULL;
+        s->listeners = 8;
+        s->last = -1;
+        s->listener = kalloc(sizeof(struct task *) * (s->listeners + 1));
+        for (i = 0; i < s->listeners; i++)
+            s->listener[i] = NULL;
     }
     return s;
 }
 
-void frosted_mutex_destroy(frosted_mutex_t *s)
+void mutex_destroy(mutex_t *s)
 {
     if (s->listener)
         kfree(s->listener);
     kfree(s);
 }
 
-static int frosted_mutex_spinlock(frosted_mutex_t *s)
+static int mutex_spinlock(mutex_t *s)
 {
     if (!s)
         return -EINVAL;
@@ -166,10 +231,19 @@ static int frosted_mutex_spinlock(frosted_mutex_t *s)
     return 0;
 }
 
-int frosted_mutex_lock(frosted_mutex_t *s)
+int mutex_trylock(mutex_t *s)
 {
-    if (scheduler_get_cur_pid() == 0)
-        return frosted_mutex_spinlock(s);
+    if (!s)
+        return -EINVAL;
+    if(_mutex_lock(s) != 0)
+        return -EAGAIN;
+    return 0;
+}
+
+int mutex_lock(mutex_t *s)
+{
+    if (this_task() == NULL)
+        return mutex_spinlock(s);
     if (!s)
         return -EINVAL;
     if(_mutex_lock(s) != 0) {
@@ -181,16 +255,26 @@ int frosted_mutex_lock(frosted_mutex_t *s)
     return 0;
 }
 
-int frosted_mutex_unlock(frosted_mutex_t *s)
+int mutex_unlock(mutex_t *s)
 {
     if (!s)
         return -EINVAL;
     if (_mutex_unlock(s) == 0) {
         int i;
-        for(i = 0; i < s->listeners; i++) {
-            int pid = s->listener[i];
-            if (pid >= 0) {
-                task_resume(pid);
+        for(i = s->last+1; i < s->listeners; i++) {
+            struct task *t = s->listener[i];
+            if (t) {
+                task_resume_lock(t);
+                s->listener[i] = NULL;
+                return 0;
+            }
+        }
+        for(i = 0; i <= s->last; i++) {
+            struct task *t = s->listener[i];
+            if (t) {
+                task_resume_lock(t);
+                s->listener[i] = NULL;
+                return 0;
             }
         }
         return 0;
@@ -198,25 +282,47 @@ int frosted_mutex_unlock(frosted_mutex_t *s)
     return -EAGAIN;
 }
 
+int suspend_on_mutex_lock(mutex_t *s)
+{
+    int ret;
+    if (!s)
+        return -EINVAL;
+    ret = _mutex_lock(s);
+    if (ret != 0) {
+        _add_listener(s);
+        return EAGAIN;
+    }
+    return 0;
+}
+
 
 /* Mutex: Syscalls */
 int sys_mutex_init_hdlr(int arg1, int arg2, int arg3, int arg4, int arg5)
 {
-    return (int)frosted_mutex_init(arg1);
+    return (int)mutex_init(arg1);
 }
 
 int sys_mutex_lock_hdlr(int arg1, int arg2, int arg3, int arg4, int arg5)
 {
-    return frosted_mutex_lock((frosted_mutex_t *)arg1);
+    struct semaphore *s = (struct semaphore *)arg1;
+    if (!s || s->signature != SIGN_MUTEX)
+        return -EACCES;
+    return mutex_lock((mutex_t *)arg1);
 }
 
 int sys_mutex_unlock_hdlr(int arg1, int arg2, int arg3, int arg4, int arg5)
 {
-    return frosted_mutex_unlock((frosted_mutex_t *)arg1);
+    struct semaphore *s = (struct semaphore *)arg1;
+    if (!s || s->signature != SIGN_MUTEX)
+        return -EACCES;
+    return mutex_unlock((mutex_t *)arg1);
 }
 
 int sys_mutex_destroy_hdlr(int arg1, int arg2, int arg3, int arg4, int arg5)
 {
+    struct semaphore *s = (struct semaphore *)arg1;
+    if (!s || s->signature != SIGN_MUTEX)
+        return -EACCES;
     return sem_destroy((sem_t *)arg1); /* Same as semaphore */
 }
 

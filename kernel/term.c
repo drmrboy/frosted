@@ -1,10 +1,10 @@
-/*  
+/*
  *      This file is part of frosted.
  *
  *      frosted is free software: you can redistribute it and/or modify
- *      it under the terms of the GNU General Public License version 2, as 
+ *      it under the terms of the GNU General Public License version 2, as
  *      published by the Free Software Foundation.
- *      
+ *
  *
  *      frosted is distributed in the hope that it will be useful,
  *      but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -14,8 +14,9 @@
  *      You should have received a copy of the GNU General Public License
  *      along with frosted.  If not, see <http://www.gnu.org/licenses/>.
  *
+ *      Authors: Daniele Lacamera, Maxime Vincent
  *
- */  
+ */
 #include "frosted.h"
 #include <string.h>
 #include <sys/termios.h>
@@ -32,6 +33,8 @@ int sys_tcgetattr_hdlr(int arg1, int arg2)
 {
     struct termios *t = (struct termios *)arg2;
     struct module *m;
+    if (task_ptr_valid(t))
+        return -EACCES;
     m = get_term_mod(arg1);
     if (m && m->ops.tcgetattr)
         return m->ops.tcgetattr(arg1, t);
@@ -43,6 +46,8 @@ int sys_tcsetattr_hdlr(int arg1, int arg2, int arg3)
 {
     const struct termios *t = (const struct termios *)arg3;
     struct module *m;
+    if (task_ptr_valid(t))
+        return -EACCES;
     m = get_term_mod(arg1);
     if (m && m->ops.tcsetattr)
         return m->ops.tcsetattr(arg1, arg2, t);
@@ -53,8 +58,6 @@ int sys_tcsetattr_hdlr(int arg1, int arg2, int arg3)
 
 int sys_tcsendbreak_hdlr(int arg1, int arg2)
 {
-    /* TODO: send SIGINT to self. */ 
+    /* TODO: send SIGINT to self. */
     return -EOPNOTSUPP;
 }
-
-

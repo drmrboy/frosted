@@ -1,153 +1,219 @@
-menu "Platform Selection"
-
-choice ARCH
-    prompt "Architecture"
-    default ARCH_LM3S
-
-    config ARCH_LM3S
-    bool "LM3S"
-    help
-        Enable support for Stellaris LM3S systems
-
-    config ARCH_LPC17XX
-    bool "LPC17XX"
-    help
-        Enable support for NXP LPC17xx systems
-
-    config ARCH_STM32F4
-    bool "STM32F4"
-    help
-        Enable support for ST STM32F4 systems
-endchoice
-
-source "../kernel/stm32f4/Kconfig"
-source "../kernel/lpc17xx/Kconfig"
-source "../kernel/lm3s/Kconfig"
-
-config FLASH_SIZE_2MB
-        bool
-config FLASH_SIZE_1MB
-        bool
-config FLASH_SIZE_512KB
-        bool
-config FLASH_SIZE_384KB
-        bool
-config FLASH_SIZE_256KB
-        bool
-config FLASH_SIZE_128KB
-        bool
-
-config RAM_SIZE_256KB
-        bool
-config RAM_SIZE_192KB
-        bool
-config RAM_SIZE_128KB
-        bool
-config RAM_SIZE_96KB
-        bool
-config RAM_SIZE_64KB
-        bool
-config RAM_SIZE_32KB
-        bool
-config RAM_SIZE_16KB
-        bool
-
-config ARCH_STM32F401
-    bool
-config ARCH_STM32F405
-    bool
-config ARCH_STM32F407
-    bool
-config ARCH_STM32F411
-    bool
-config ARCH_STM32F429
-    bool
-
-config DEVSTM32F4DMA
-    bool
-
-#Temp hack to allow '407 & '411 clock setups to coexist
-choice
-    prompt "Clock Speed"
-    config CLK_48MHZ
-        bool "48MHz"
-        depends on (ARCH_STM32F401  || ARCH_STM32F411 || ARCH_STM32F429)
-    config CLK_84MHZ
-        bool "84MHz"
-        depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F429)
-    config CLK_100MHZ
-        bool "100MHz"
-        depends on ARCH_LPC17XX
-    config CLK_120MHZ
-        bool "120MHz"
-        depends on (ARCH_STM32F407 || ARCH_STM32F405 || ARCH_LPC1769 )
-    config CLK_168MHZ
-        bool "168MHz"
-        depends on (ARCH_STM32F407 ||  ARCH_STM32F405 || ARCH_STM32F429)
-endchoice
-
-choice 
-    prompt "Board"
-config MACH_STM32F407Discovery
-    bool "STM32F407Discovery"
-    depends on (ARCH_STM32F407)
-    default y
-config MACH_STM32F405Pyboard
-    bool "STM32F405 PyBoard (micropython)"
-    depends on (ARCH_STM32F405)
-    default y
-config MACH_STM32F4x1Discovery
-    bool "STM32F4x1Discovery"
-    depends on (   ARCH_STM32F401 ||ARCH_STM32F411)
-    default y
-config MACH_STM32F429Discovery
-    bool "STM32F429Discovery"
-    depends on (ARCH_STM32F429)
+menu "Compiler options"
+    config GDB_CFLAG
+    bool "Keep debugging symbols"
     default y
 
-config MACH_LPC1768MBED
-    bool "LPC1768MBED"
-    depends on ARCH_LPC1768
-config MACH_SEEEDPRO
-    bool "SEEEDPRO"
-    depends on ARCH_LPC1768
-    default y
-config MACH_LPC1679XPRESSO
-    bool "LPC1679XPRESSO"
-    depends on ARCH_LPC1769
-    default y
+    choice
+    prompt "Compiler optimization"
+        config OPTIMIZE_NONE
+        bool "No optimization"
 
-config MACH_LM3S6965EVB
-    bool "lm3s6965evb"
-    depends on ARCH_LM3S6965
-    default y
+        config OPTIMIZE_SIZE
+        bool "Optimize for size"
 
-endchoice
+        config OPTIMIZE_PERF
+        bool "Optimize for performance"
+    endchoice
+
 
 endmenu
 
+
+menu "Platform Selection"
+
+    choice ARCH
+        prompt "Architecture"
+        default ARCH_LM3S
+
+        config ARCH_LM3S
+        bool "LM3S"
+        help
+            Enable support for Stellaris LM3S systems
+
+        config ARCH_LPC17XX
+        bool "LPC17XX"
+        help
+            Enable support for NXP LPC17xx systems
+
+        config ARCH_STM32F4
+        bool "STM32F4"
+        help
+            Enable support for ST STM32F4 systems
+
+        config ARCH_STM32F7
+        bool "STM32F7"
+        help
+            Enable support for ST STM32F7 systems
+    endchoice
+
+
+    source "../kernel/stm32f7/Kconfig"
+    source "../kernel/stm32f4/Kconfig"
+    source "../kernel/lpc17xx/Kconfig"
+    source "../kernel/lm3s/Kconfig"
+
+    config FLASH_SIZE_2MB
+            bool
+    config FLASH_SIZE_1MB
+            bool
+    config FLASH_SIZE_512KB
+            bool
+    config FLASH_SIZE_384KB
+            bool
+    config FLASH_SIZE_256KB
+            bool
+    config FLASH_SIZE_128KB
+            bool
+
+    config RAM_SIZE_368KB
+            bool
+    config RAM_SIZE_320KB
+            bool
+    config RAM_SIZE_256KB
+            bool
+    config RAM_SIZE_192KB
+            bool
+    config RAM_SIZE_128KB
+            bool
+    config RAM_SIZE_96KB
+            bool
+    config RAM_SIZE_64KB
+            bool
+    config RAM_SIZE_32KB
+            bool
+    config RAM_SIZE_16KB
+            bool
+
+    config ARCH_STM32F401
+        bool
+    config ARCH_STM32F405
+        bool
+    config ARCH_STM32F407
+        bool
+    config ARCH_STM32F411
+        bool
+    config ARCH_STM32F429
+        bool
+    config ARCH_STM32F446
+        bool
+    config ARCH_STM32F746
+        bool
+    config ARCH_STM32F769
+        bool
+
+    config DEVSTM32DMA
+        bool
+
+    #Temp hack to allow '407 & '411 clock setups to coexist
+    choice
+        prompt "Clock Speed"
+        config CLK_48MHZ
+            bool "48MHz"
+            depends on (ARCH_STM32F401  || ARCH_STM32F411 || ARCH_STM32F429)
+        config CLK_84MHZ
+            bool "84MHz"
+            depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F429)
+        config CLK_100MHZ
+            bool "100MHz"
+            depends on ARCH_LPC17XX
+        config CLK_120MHZ
+            bool "120MHz"
+            depends on (ARCH_STM32F407 || ARCH_STM32F405 || ARCH_LPC1769)
+        config CLK_168MHZ
+            bool "168MHz"
+            depends on (ARCH_STM32F407 ||  ARCH_STM32F405 || ARCH_STM32F429)
+        config CLK_180MHZ
+            bool "180MHz"
+            depends on (ARCH_STM32F446)
+        config CLK_216MHZ
+            bool "216MHZ"
+            depends on (ARCH_STM32F746 || ARCH_STM32F769)
+    endchoice
+
+    choice
+        prompt "Board"
+        default MACH_STM32F407Discovery
+    config MACH_STM32F746Discovery
+        bool "STM32F746 Discovery"
+        depends on (ARCH_STM32F746)
+        default y
+    config MACH_STM32F769Discovery
+        bool "STM32F769 Discovery"
+        depends on (ARCH_STM32F769)
+        default y
+    config MACH_STM32F746Nucleo144
+        bool "STM32F746 Nucleo-144"
+        depends on (ARCH_STM32F746)
+        default y
+    config MACH_STM32F407Discovery
+        bool "STM32F407Discovery"
+        depends on (ARCH_STM32F407)
+        default y
+    config MACH_STM32F405Pyboard
+        bool "STM32F405 PyBoard (micropython)"
+        depends on (ARCH_STM32F405)
+        default y
+    config MACH_STM32F4x1Discovery
+        bool "STM32F4x1Discovery"
+        depends on (   ARCH_STM32F401 ||ARCH_STM32F411)
+        default y
+    config MACH_STM32F429Discovery
+        bool "STM32F429Discovery"
+        depends on (ARCH_STM32F429)
+        default y
+    config MACH_STM32F446Nucleo
+        bool "STM32F446 Nucleo"
+        depends on (ARCH_STM32F446)
+        default y
+
+    config MACH_LPC1768MBED
+        bool "LPC1768MBED"
+        depends on ARCH_LPC1768
+    config MACH_SEEEDPRO
+        bool "SEEEDPRO"
+        depends on ARCH_LPC1768
+        default y
+    config MACH_LPC1679XPRESSO
+        bool "LPC1679XPRESSO"
+        depends on ARCH_LPC1769
+        default y
+    config MACH_LM3S6965EVB
+        bool "lm3s6965evb"
+        depends on ARCH_LM3S6965
+        default y
+    config MACH_LM3SVIRT
+        bool "lm3s-qemu"
+        depends on ARCH_LM3SVIRT
+        default y
+
+    endchoice
+
+    config STM32F7_SDRAM
+    depends on ARCH_STM32F7
+    bool "Enable external SDRAM"
+    default y
+
+    config STM32F4_SDRAM
+    depends on ARCH_STM32F4
+    bool "Enable external SDRAM"
+    default n
+
+endmenu
+
+
 menu "Kernel Configuration"
- 
+
 config KFLASHMEM_SIZE
     int "Kernel Flash size (KB)"
-    default 32
+    default 64
 
 config KRAMMEM_SIZE
     int "Kernel RAM size (KB)"
-    default 32
-
-config KLOG
-    bool "Enable kernel logging"
-config KLOG_DEV
-    depends on (KLOG && DEVUART)
-    string "Kernel log output device"
-    default "/dev/ttyS0"
-
-endmenu
+    default 64
 
 choice
-prompt "Default size for tasks stack memory"
-default TASK_STACK_SIZE_2K 
+prompt "Tasks Stack Size"
+default TASK_STACK_SIZE_2K
 
    config TASK_STACK_SIZE_1K
    bool "Tiny stack (1024 Bytes)"
@@ -160,11 +226,56 @@ default TASK_STACK_SIZE_2K
 
    config TASK_STACK_SIZE_8K
    bool "Huge stack (8192 Bytes)"
-
 endchoice
 
-menu "Subsystems"
-   menu "Filesystems"
+config MPU
+bool "Run-time Memory Protection"
+default y
+
+endmenu
+
+menu "IPC features"
+    config SIGNALS
+    bool "Process Signals"
+    default y
+
+    config PIPE
+    bool "Pipe"
+    default y
+
+    config SOCK_UNIX
+    bool "UNIX Sockets for IPC"
+    default n
+
+endmenu
+
+menu "Debugging options"
+
+config KLOG
+    bool "Enable kernel logging"
+    default y
+
+config KLOG_SIZE
+    depends on KLOG
+    int "Kernel log buffer size"
+    default 256
+
+config MEMFAULT_DBG
+    bool "Enable extended segfault debug"
+    default y
+
+config HARDFAULT_DBG
+    bool "Enable extended hardfault debug"
+    default n
+
+config STRACE
+    bool "Enable syscall tracer"
+    default n
+
+endmenu
+
+
+menu "Filesystems"
        config SYSFS
        bool "SysFS (/sys)"
        default y
@@ -172,16 +283,28 @@ menu "Subsystems"
        config MEMFS
        bool "MemFS"
        default y
-       
+
        config XIPFS
        bool "Xip FS"
        default y
-   endmenu
 
-   menu "Sockets"
-       config SOCK_UNIX
-       bool "UNIX Sockets for IPC"
+       config FATFS
+       bool "Fat FS"
        default n
+
+       config FAT32
+       depends on FATFS
+       bool "Fat32 support"
+       default n
+
+       config FAT16
+       depends on FATFS
+       bool "Fat16 support"
+       default y
+
+endmenu
+
+menu "Networking"
        config SOCK_INET
        bool "TCP/IP Socket support"
        default n
@@ -204,9 +327,9 @@ menu "Subsystems"
        endchoice
        source ../kernel/net/Kconfig
 
-   endmenu
+endmenu
 
-   menu "Devices"
+menu "Device Drivers"
        config DEVNULL
        bool "Support for /dev/null and /dev/zero"
        default y
@@ -219,23 +342,28 @@ menu "Subsystems"
 
             config USART_0
             bool "USART 0"
-            depends on ARCH_LM3S6965
+            depends on (ARCH_LM3S6965 || ARCH_LM3SVIRT)
 
             config USART_1
             bool "USART 1"
-            depends on (ARCH_LM3S6965 ||ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F405 || ARCH_STM32F407  || ARCH_STM32F429 )
+            depends on (ARCH_LM3S6965 || ARCH_LM3SVIRT || \
+                        ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F405 || ARCH_STM32F407  || ARCH_STM32F429 || ARCH_STM32F446 || \
+                        ARCH_STM32F746 || ARCH_STM32F769)
 
             config USART_2
             bool "USART 2"
-            depends on (ARCH_LM3S6965 ||ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F405 || ARCH_STM32F429  || ARCH_STM32F407)
+            depends on (ARCH_LM3S6965 || ARCH_LM3SVIRT || \
+                        ARCH_STM32F401 || ARCH_STM32F411 || ARCH_STM32F405 || ARCH_STM32F429  || ARCH_STM32F407 || ARCH_STM32F446 || \
+                        ARCH_STM32F746 || ARCH_STM32F769 )
 
             config USART_3
             bool "USART 3"
-            depends on (ARCH_STM32F407 || ARCH_STM32F405)
+            depends on (ARCH_STM32F407 || ARCH_STM32F405 || ARCH_STM32F746 || ARCH_STM32F769 )
 
             config USART_6
             bool "USART 6"
-            depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405)
+            depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405 || ARCH_STM32F446 || \
+                        ARCH_STM32F746 || ARCH_STM32F769 )
 
             config UART_0
             bool "UART 0"
@@ -254,112 +382,205 @@ menu "Subsystems"
             depends on ARCH_LPC17XX
 
        endif
-       
+
+       config DEVF4DSP
+       bool "STM32F4 Sound driver"
+       depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405  || ARCH_STM32F429 || ARCH_STM32F446)
+       select DEVSTM32DMA
+       default n
+
+       config DEVSTM32USB
+       bool "Support for USB OTG guest"
+       depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405  || ARCH_STM32F429 || ARCH_STM32F446 || \
+                   ARCH_STM32F746 || ARCH_STM32F769)
+       default n
+
        config DEV_USB_ETH
-       depends on (PICOTCP)
-       bool "Legacy Ethernet over USB (CDC-ECM)"
+       depends on PICOTCP && DEVSTM32USB
+       bool "Ethernet over USB (CDC-ECM)"
        default n
 
-       config DEVUSBCDCECM
-       depends on (PICOTCP && DEVF4USB && !DEVUSBETH)
-       bool "Ethernet over USB (CDC-ECM) - Layered"
-       default n
+       if DEV_USB_ETH
+           config USB_DEFAULT_IP
+           string "Default (boot-up) address for usb0"
+           default 192.168.6.150
 
-       config DEVUSBCDCACM
-       depends on (DEVF4USB && !DEVUSBETH)
-       bool "UART over USB (CDC-ACM) - Layered"
-       default n
+           config USB_DEFAULT_NM
+           string "Default (boot-up) netmask for usb0"
+           default 255.255.255.0
 
-    
-       if (DEV_USB_ETH || DEVUSBCDCECM)
-       config USB_DEFAULT_IP
-       string "Default (boot-up) address for usb0"
-       default 192.168.6.150
-
-       config USB_DEFAULT_NM
-       string "Default (boot-up) netmask for usb0"
-       default 255.255.255.0
+           config USB_DEFAULT_GW
+           string "Default (boot-up) gateway for usb0"
+           default 192.168.6.1
        endif
 
-       menuconfig DEVF4USB
-       bool "STM32F4 USB Driver"
-       depends on (ARCH_STM32F411 || ARCH_STM32F407)
+       config DEVTIM
+       bool "System CPU timer on TIM2"
+       depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405  || ARCH_STM32F429 || ARCH_STM32F446 || ARCH_STM32F746)
        default n
 
-       menuconfig DEVF4EXTI
-       bool "STM32F4 EXTI driver"
-       depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405  || ARCH_STM32F429 )
-       default n
-
-       menuconfig DEVADC
+       config DEVADC
        bool "Generic ADC driver"
-       depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405  || ARCH_STM32F429 )
-       select DEVSTM32F4DMA
+       depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405  || ARCH_STM32F429 || ARCH_STM32F446)
+       select DEVSTM32DMA
        default n
 
-       menuconfig DEVF4I2C
-       bool "STM32F4 I2C driver"
-       depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405  || ARCH_STM32F429 )
-       select DEVSTM32F4DMA
+
+       config DEVF4ETH
+       bool "STM32F4 Ethernet driver"
+       depends on ((ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405  || ARCH_STM32F429 || ARCH_STM32F446) && PICOTCP)
        default n
 
-       if DEVF4I2C
-            config I2C_1
-            bool "I2C 1"
+       config DEVF7ETH
+       bool "STM32F7 Ethernet driver"
+       depends on ((ARCH_STM32F746 || ARCH_STM32F769) && PICOTCP)
+       default n
+
+       config DEVLM3SETH
+       bool "LM3S Ethernet driver"
+       depends on ((ARCH_LM3S) && PICOTCP)
+       default n
+
+       if DEVF4ETH || DEVF7ETH || DEVLM3SETH
+               config ETH_DEFAULT_IP
+               string "Default (boot-up) address for eth0"
+               default 192.168.2.150
+
+               config ETH_DEFAULT_NM
+               string "Default (boot-up) netmask for eth0"
+               default 255.255.255.0
+
+               config ETH_DEFAULT_GW
+               string "Default (boot-up) gateway for eth0"
+               default 192.168.2.1
+
        endif
 
-       config DEVCS43L22
-       tristate "CS43L22 driver (Stereo DAC)"
-       depends on ( I2C_1)
+       config DEVSTM32SDIO
+       bool "STM32F4 SD I/O driver"
+       depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405  || ARCH_STM32F429 || ARCH_STM32F7|| ARCH_STM32F446)
        default n
 
-       config DEVLSM303DLHC
-       tristate "LSM303DLHC driver (Accelerometer & Magnetometer)"
-       depends on ( I2C_1)
+       menuconfig DEVSTM32I2C
+       bool "STM32 I2C driver"
+       depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405  || ARCH_STM32F429 || ARCH_STM32F446 || ARCH_STM32F746)
+       select DEVSTM32DMA
        default n
 
 
-       
+           if DEVSTM32I2C
+                config I2C1
+                bool "I2C 1"
+                default n
+                config I2C2
+                bool "I2C 2"
+                default n
+                config I2C3
+                bool "I2C 3"
+                default y
+           endif
+
+           config DEVCS43L22
+           tristate "CS43L22 driver (Stereo DAC)"
+           depends on (DEVSTM32I2C)
+           default n
+
+
+           config DEVLSM303DLHC
+           tristate "LSM303DLHC driver (Accelerometer & Magnetometer)"
+           depends on (DEVSTM32I2C)
+           default n
+           
+           config DEVMCCOG21
+           tristate "MCCOG21 driver (2-lines B/W display)"
+           depends on (DEVSTM32I2C)
+           default n
+           
+           config DEVFT5336
+           tristate "FT5336 driver (Touchscreen STM32F746)"
+           depends on (DEVSTM32I2C)
+           default n
+
+           config DEVSTMPE811
+           tristate "STMPE811 driver (Touchscreen)"
+           depends on (DEVSTM32I2C)
+           default n
+
+
+
        menuconfig DEVSPI
-       bool "Generic SPI driver"
-       depends on (ARCH_STM32F401 ||ARCH_STM32F411 || ARCH_STM32F407 || ARCH_STM32F405  || ARCH_STM32F429 )
-       select DEVSTM32F4DMA
+           bool "Generic SPI driver"
+           depends on (ARCH_STM32F4 || ARCH_STM32F7)
+           select DEVSTM32DMA
+           default n
+
+           if DEVSPI
+                config SPI_1
+                bool "SPI 1"
+
+                config SPI_5
+                bool "SPI 5"
+
+           endif
+
+           config DEVLIS3DSH
+           tristate "LIS3DSH driver (3-Axis Accelerometer)"
+           depends on (DEVSPI)
+           default n
+
+           config DEVILI9341
+           tristate "ILI9341 driver (LCD Controller)"
+           depends on (DEVSPI)
+           default n
+
+           config DEVL3GD20
+           tristate "L3GD20 driver (Gyro)"
+           depends on (DEVSPI)
+           default n
+
+       config DEV_RANDOM
+       depends on (ARCH_STM32F4 || ARCH_STM32F7)
+       bool "STM32F2/F4/F7 Random devices"
        default n
 
-       if DEVSPI
-            config SPI_1
-            bool "SPI 1"
+       if DEV_RANDOM
+          choice
+            prompt "Random device selection"
+            config DEVRNG
+            bool "Hardware TRNG driver"
+
+            config DEVFRAND
+            bool "Fortuna PRNG device"
+          endchoice
        endif
 
-       config DEVL3GD20
-       tristate "L3GD20 driver (Gyro)"
-       depends on ( SPI_1)
-       default n
+       menuconfig DEVFRAMEBUFFER
+           depends on (ARCH_STM32F7 || ARCH_STM32F4)
+           bool "STM32 Framebuffer driver"
+           default y
 
-       config DEVGPIO
-       depends on (ARCH_STM32F4 || ARCH_LPC17XX)
-       bool "Generic GPIO driver"
-       default y
+       config DEVFBCON
+           depends on DEVFRAMEBUFFER
+           bool "Console on Framebuffer via /dev/fbcon"
+           default y
 
-       config DEVRNG
-       depends on ARCH_STM32F4
-       bool "STM32F4 RNG driver"
-       default y
+       config DEVF7DISCOLTDC
+           depends on DEVFRAMEBUFFER
+           bool "F746 Discovery LTDC"
+           default y
 
-   endmenu
 endmenu
 
-menu "Userspace"
-choice
-    prompt "System Selection"
-    default USERSPACE_MINI
-
-    config USERSPACE_MINI
-    bool "Frosted Minimalistic Userspace"
-
-    config USERSPACE_BFLT
-    depends on XIPFS
-    bool "Frosted Userspace with bFLT executables in xipfs filesystem"
-
-endchoice
+menu "Power Management"
+    if DEVTIM
+        config LOWPOWER
+        bool "Enable low-power optimizations"
+        default n
+        config TICKLESS
+        bool "Disable systick in between process switches (untested)"
+        default n
+    endif
+    if !DEVTIM
+        comment "Power Management requires CPU Timer support"
+    endif
 endmenu

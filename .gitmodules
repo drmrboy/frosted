@@ -1,15 +1,15 @@
-[submodule "kernel/libopencm3"]
-	path = kernel/libopencm3
-	url = https://github.com/insane-adding-machines/libopencm3.git
 [submodule "apps/busybox"]
 	path = apps/busybox
-	url = git@github.com:insane-adding-machines/busybox.git
-[submodule "frosted-mini-userspace"]
-	path = frosted-mini-userspace
-	url = git@github.com:insane-adding-machines/frosted-mini-userspace.git
-[submodule "frosted-mini-userspace-bflt"]
-	path = frosted-mini-userspace-bflt
-	url = git@github.com:insane-adding-machines/frosted-mini-userspace-bflt.git
+	url = https://github.com/insane-adding-machines/busybox.git
 [submodule "kernel/net/picotcp"]
 	path = kernel/net/picotcp
-	url = https://github.com/tass-belgium/picotcp.git
+	url = https://github.com/insane-adding-machines/picotcp.git
+[submodule "frosted-userland"]
+	path = frosted-userland
+	url = https://github.com/insane-adding-machines/frosted-userland.git
+[submodule "kernel/frosted-headers"]
+	path = kernel/frosted-headers
+	url = https://github.com/insane-adding-machines/frosted-headers.git
+[submodule "kernel/unicore-mx"]
+	path = kernel/unicore-mx
+	url = https://github.com/insane-adding-machines/unicore-mx.git

@@ -1,10 +1,10 @@
-/*  
+/*
  *      This file is part of frosted.
  *
  *      frosted is free software: you can redistribute it and/or modify
- *      it under the terms of the GNU General Public License version 2, as 
+ *      it under the terms of the GNU General Public License version 2, as
  *      published by the Free Software Foundation.
- *      
+ *
  *
  *      frosted is distributed in the hope that it will be useful,
  *      but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -14,14 +14,18 @@
  *      You should have received a copy of the GNU General Public License
  *      along with frosted.  If not, see <http://www.gnu.org/licenses/>.
  *
+ *      Authors: Daniele Lacamera
  *
- */  
+ */
+
 #include "frosted.h"
+#include "scheduler.h"
 #include "cirbuf.h"
 #include "string.h"
 #include "sys/termios.h"
 #include "poll.h"
 
+#ifdef CONFIG_PIPE
 #define PIPE_BUFSIZE 64
 
 static struct module mod_pipe;
@@ -30,8 +34,8 @@ static struct module mod_pipe;
 struct pipe_priv {
     struct fnode *fno_r;
     struct fnode *fno_w;
-    int pid_r;
-    int pid_w;
+    struct task *task_r;
+    struct task *task_w;
     int w_off;
     struct cirbuf *cb;
 };
@@ -45,16 +49,21 @@ int sys_pipe2_hdlr(int paddr, int flags)
     int *pfd = (int*)paddr;
     struct fnode *rd, *wr;
     struct pipe_priv *pp;
+
+
+    if (task_ptr_valid(pfd))
+        return -EACCES;
+
     pp = kalloc(sizeof (struct pipe_priv));
     if (!pp) {
         return -ENOMEM;
     }
 
-    rd = fno_create(&mod_pipe, "", &PIPE_ROOT); 
+    rd = fno_create(&mod_pipe, "", &PIPE_ROOT);
     if (!rd) {
         goto fail_rd;
     }
-    wr = fno_create(&mod_pipe, "", &PIPE_ROOT); 
+    wr = fno_create(&mod_pipe, "", &PIPE_ROOT);
     if (!wr) {
         goto fail_wr;
     }
@@ -65,17 +74,17 @@ int sys_pipe2_hdlr(int paddr, int flags)
     if (pfd[0] < 0 || pfd[1] < 0) {
         goto fail_all;
     }
-    
+
     task_fd_setmask(pfd[0], O_RDONLY);
     task_fd_setmask(pfd[1], O_WRONLY);
-    
+
     rd->priv = pp;
     wr->priv = pp;
 
     pp->fno_r = rd;
     pp->fno_w = wr;
-    pp->pid_r = 0;
-    pp->pid_w = 0;
+    pp->task_r = NULL;
+    pp->task_w = NULL;
     pp->w_off = 0;
     pp->cb = cirbuf_create(PIPE_BUFSIZE);
     if (!pp->cb) {
@@ -126,31 +135,31 @@ static int pipe_poll(struct fnode *f, uint16_t events, uint16_t *revents)
 static int pipe_close(struct fnode *f)
 {
     struct pipe_priv *pp;
-    uint16_t pid;
-    pid = scheduler_get_cur_pid();
+    struct task *t;
+    t = this_task();
     if (!f)
         return -EINVAL;
 
     if (f->owner != &mod_pipe)
         return -EINVAL;
-    
+
     pp = (struct pipe_priv *)f->priv;
     if (!pp)
         return -EINVAL;
 
 
-    if ((f == pp->fno_r) && (f->usage == 1)) {
+    if (f == pp->fno_r) {
         pp->fno_r = NULL;
         fno_unlink(f);
-        if ((pp->pid_w != pid) && (pp->pid_w > 0)) {
-            task_resume(pp->pid_w);
+        if ((pp->task_w != t) && (pp->task_w != NULL)) {
+            task_resume(pp->task_w);
         }
     }
-    if ((f == pp->fno_w) && (f->usage == 1)) {
+    if (f == pp->fno_w) {
         pp->fno_w = NULL;
         fno_unlink(f);
-        if ((pp->pid_r != pid) && (pp->pid_r > 0)) {
-            task_resume(pp->pid_r);
+        if ((pp->task_r != t) && (pp->task_r != NULL)) {
+            task_resume(pp->task_r);
         }
     }
     if ((!pp->fno_w) && (!pp->fno_r))
@@ -176,9 +185,13 @@ static int pipe_read(struct fnode *f, void *buf, unsigned int len)
 
     len_available =  cirbuf_bytesinuse(pp->cb);
     if (len_available <= 0) {
-        pp->pid_r = scheduler_get_cur_pid();
-        task_suspend();
-        return SYS_CALL_AGAIN;
+        if (FNO_BLOCKING(f)) {
+            pp->task_r = this_task();
+            task_suspend();
+            return SYS_CALL_AGAIN;
+        } else {
+            return -EWOULDBLOCK;
+        }
     }
 
     for(out = 0; out < len; out++) {
@@ -187,7 +200,7 @@ static int pipe_read(struct fnode *f, void *buf, unsigned int len)
             break;
         ptr++;
     }
-    pp->pid_r = 0;
+    pp->task_r = 0;
     return out;
 }
 
@@ -203,12 +216,12 @@ static int pipe_write(struct fnode *f, const void *buf, unsigned int len)
     pp = (struct pipe_priv *)f->priv;
     if (!pp)
         return -EINVAL;
-    
+
     if (pp->fno_w != f)
         return -EPERM;
 
     out = pp->w_off;
-    
+
     len_available =  cirbuf_bytesfree(pp->cb);
     if (len_available > (len - out))
         len_available = (len - out);
@@ -219,14 +232,18 @@ static int pipe_write(struct fnode *f, const void *buf, unsigned int len)
     }
 
     if (out < len) {
-        pp->pid_w = scheduler_get_cur_pid();
-        pp->w_off = out;
-        task_suspend();
-        return SYS_CALL_AGAIN;
+        if (FNO_BLOCKING(f)) {
+            pp->task_w = this_task();
+            pp->w_off = out;
+            task_suspend();
+            return SYS_CALL_AGAIN;
+        } else {
+            if (out == 0)
+                return -EWOULDBLOCK;
+        }
     }
-
     pp->w_off = 0;
-    pp->pid_w = 0;
+    pp->task_w = NULL;
     return out;
 }
 
@@ -242,5 +259,9 @@ void sys_pipe_init(void)
 
     register_module(&mod_pipe);
 }
-
-
+#else
+#   define sys_pipe_init()  do{}while(0)
+int sys_pipe2_hdlr(int paddr, int flags) {
+    return -ENOSYS;
+}
+#endif

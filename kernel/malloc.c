@@ -22,7 +22,9 @@
 #include <unistd.h>
 
 #include "malloc.h"
+#include "scheduler.h"
 #include "frosted.h"
+#include "locks.h"
 
 /*------------------*/
 /* Defines          */
@@ -38,17 +40,33 @@
 
 #define F_IN_USE 0x20
 #define in_use(x) (((x->flags) & F_IN_USE) == F_IN_USE)
-#define MEMPOOL(x) ((((x) & MEM_OWNER_MASK) < 4)?(x):(3))
+#define block_valid(b) ((b) && (b->magic == F_MALLOC_MAGIC))
+
+static inline int MEMPOOL(int x)
+{
+#ifdef CONFIG_TCPIP_MEMPOOL
+    if (x == MEM_TCPIP)
+        return 3;
+#endif
+    if (x == MEM_EXTRA)
+        return 4;
+    if (x == MEM_TASK)
+        return 2;
+    if (x == MEM_USER)
+        return 1;
+    return 0;
+}
 
 /*------------------*/
 /* Structures       */
 /*------------------*/
 struct f_malloc_block {
-    uint32_t magic;               /* magic fingerprint */
+    uint32_t magic;                 /* magic fingerprint */
     struct f_malloc_block * prev;   /* previous block */
     struct f_malloc_block * next;   /* next, or last block? */
-    size_t size;    /* malloc size excluding this block - next block is adjacent, if !last_block */
+    size_t size;                    /* malloc size excluding this block - next block is adjacent, if !last_block */
     uint32_t flags; 
+    int pid;
 };
 
 
@@ -60,8 +78,10 @@ static struct f_malloc_block *malloc_entry[4] = {NULL, NULL, NULL, NULL};
 /* Globals */
 struct f_malloc_stats f_malloc_stats[4] = {};
 
-
-
+/* Mlock is a special lock, so initialization is made static */
+static struct task *_m_listeners[16] = {};
+static struct semaphore _mlock = { .signature = 0xCAFEC0C0, .value = 1, .listeners=16, .last=-1, .listener=_m_listeners};
+static mutex_t *mlock = (mutex_t *)(&_mlock);
 
 #define KMEM_SIZE   (CONFIG_KRAM_SIZE << 10)
 
@@ -102,18 +122,18 @@ static struct f_malloc_block * split_block(struct f_malloc_block * blk, size_t s
     struct f_malloc_block * free_blk;
   
     /* does it fit? */
-    if (blk->size - sizeof(struct f_malloc_block) < size)
+    if ((blk->size - sizeof(struct f_malloc_block)) <= size)
         return NULL;
   
     /* shrink the block to requested size */
     free_size = blk->size - sizeof(struct f_malloc_block) - size;
     blk->size = size;
     /* create new block */
-    free_blk = (struct f_malloc_block *)(((uint8_t *)blk) + sizeof(struct f_malloc_block) + (uint8_t)blk->size);
+    free_blk = (struct f_malloc_block *)(((uint8_t *)blk) + sizeof(struct f_malloc_block) + blk->size);
     free_blk->prev = blk;
     free_blk->next = blk->next;
     blk->next = free_blk;
-    free_blk->magic = 0xDECEA5ED;
+    free_blk->magic = F_MALLOC_MAGIC;
     free_blk->size = free_size;
     free_blk->flags = 0u;
     return free_blk;
@@ -124,6 +144,9 @@ static int block_fits(struct f_malloc_block *blk, size_t size, int flags)
     uint32_t baddr = (uint32_t)blk;
     uint32_t reqsize = size + sizeof(struct f_malloc_block);
     if (!blk)
+        return 0;
+
+    if (!block_valid(blk))
         return 0;
 
     if (in_use(blk))
@@ -150,43 +173,83 @@ static struct f_malloc_block * f_find_best_fit(int flags, size_t size, struct f_
             if ((!found) || (blk->size < found->size))
                 found = blk;
         }
+        if ((blk->next) && (!block_valid(blk->next)))
+            blk->next = NULL;
+
         /* travel next block */
         blk = blk->next;
     }
     return found;
 }
 
-static char * heap_end_kernel;
-static char * heap_stack;
-static char * heap_end_user;
+static unsigned char * heap_end_kernel;
+static unsigned char * heap_stack;
+static unsigned char * heap_end_user;
+static unsigned char * heap_end_extra;
+
+static unsigned char * heap_limit_user;
+static unsigned char * heap_limit_kernel;
 
 #ifdef CONFIG_TCPIP_MEMPOOL
-    static char * heap_end_tcpip = CONFIG_TCPIP_MEMPOOL;
+    static char * heap_end_tcpip = (char *)CONFIG_TCPIP_MEMPOOL;
 #else
     static char * heap_end_tcpip = NULL;
 #endif
 
 static void * f_sbrk(int flags, int incr)
 {
-    extern char   end;           /* Set by linker */
-    extern char   _stack;        /* Set by linker */
+    extern char   end;              /* Set by linker */
+    extern char   _stack;           /* Set by linker */
+    extern char   _user_heap_start; /* Set by linker */
+    extern char   _user_heap_end;   /* Set by linker */
+#if defined(CONFIG_SRAM_EXTRA) || defined(CONFIG_SDRAM)
+    extern char   _extra_heap_start; /* Set by linker */
+    extern char   _extra_heap_end;   /* Set by linker */
+#endif
     const char  * heap_stack_high = &_stack;
     char        * prev_heap_end;
 
+    /* Set initial heap addresses */
     if (heap_end_kernel == 0) {
+        /* kernel memory */
         heap_end_kernel = &end;
-        heap_end_user = &_stack;
+        heap_limit_kernel = &end + KMEM_SIZE;
 
+#ifdef CONFIG_SDRAM
+        /* user memory  = external ram*/
+        heap_end_user = &_extra_heap_start; /* Start at beginning of heap */
+        heap_limit_user = &_extra_heap_end;
+#else
+        /* user memory */
+        heap_end_user = &_user_heap_start; /* Start at beginning of heap */
+        heap_limit_user = &_user_heap_end;
+#endif
+
+        /* task/stack memory */
         heap_stack = &_stack - 4096; 
     }
 
     if (flags & MEM_USER) {
         if (!heap_end_user)
             return (void *)(0 - 1);
+        /* Do not over-commit */
+        if ((heap_end_user + incr) > heap_limit_user)
+            return (void *)(0 - 1);
         prev_heap_end = heap_end_user;
         heap_end_user += incr;
-    }
-    else if (flags & MEM_TASK) {
+        memset(prev_heap_end, 0, incr);
+#ifdef CONFIG_SRAM_EXTRA
+    } else if (flags & MEM_EXTRA) {
+        if (!heap_end_extra)
+            return (void *)(0 - 1);
+        /* Do not over-commit */
+        if ((heap_end_extra + incr) > &_extra_heap_end)
+            return (void *)(0 - 1);
+        prev_heap_end = heap_end_extra;
+        heap_end_extra += incr;
+        memset(prev_heap_end, 0, incr);
+#endif
+    }else if (flags & MEM_TASK) {
         if ((heap_stack - incr) < heap_end_kernel)
             return (void *)(0 - 1);
         heap_stack -= incr;
@@ -197,7 +260,8 @@ static void * f_sbrk(int flags, int incr)
         prev_heap_end = heap_end_tcpip;
         heap_end_tcpip += incr;
     } else {
-        if ((heap_end_kernel + incr) > ((&end) + KMEM_SIZE))
+        if (((heap_end_kernel + incr) > heap_limit_kernel) ||
+            ((heap_end_kernel + incr) > heap_stack))
             return (void*)(0 - 1);
         prev_heap_end = heap_end_kernel;
         heap_end_kernel += incr;
@@ -232,7 +296,7 @@ void * f_calloc(int flags, size_t num, size_t size)
     return ptr;
 }
 
-void* f_realloc(int flags, void* ptr, size_t size)
+void * f_realloc(int flags, void* ptr, size_t size)
 {
     void * out = NULL;
     struct f_malloc_block * blk;
@@ -248,22 +312,26 @@ void* f_realloc(int flags, void* ptr, size_t size)
         /* f ptr is not valid, act as regular malloc() */
         out = f_malloc(flags, size);
     }
-    else if (blk->magic == 0xDECEA5ED)
+    else if (block_valid(blk))
     {
-        /* copy over old block, if valid pointer */
         size_t new_size, copy_size;
-        if ((blk->flags & F_IN_USE) == 0) {
+        if (!in_use(blk)) {
             task_segfault((uint32_t)ptr, 0, MEMFAULT_ACCESS);
         }
-        if (size > blk->size)
+
+        /* If requested size is the same as current, do nothing. */
+        if (blk->size == size)
+            return ptr;
+        else if (size > blk->size)
         {
+            /* Grow to requested size by copying the content */
             new_size = size;
             copy_size = blk->size;
         } else {
-            new_size = blk->size;
-            copy_size = size;
+            /* Shrink  (Ignore for now) */
+            return ptr;
         }
-        out = f_malloc(flags, size);
+        out = f_malloc(flags, new_size);
         if (!out)  {
             return NULL;
         }
@@ -276,14 +344,56 @@ realloc_free:
     return out;
 }
 
+void f_proc_heap_free(int pid)
+{
+    struct f_malloc_block *blk = malloc_entry[MEM_USER];
+    while (blk)
+    {
+        if (!block_valid(blk))
+            while(1); /* corrupt block! */
+        if ((blk->pid == pid) && in_use(blk)) {
+            f_free(blk);
+        }
+        blk = blk->next;
+    }
+}
+
+uint32_t f_proc_heap_count(int pid)
+{
+    struct f_malloc_block *blk = malloc_entry[MEM_USER];
+    uint32_t size = 0;
+    while (blk)
+    {
+        if ((blk->pid == pid) && in_use(blk)) {
+            size += blk->size;
+        }
+        blk = blk->next;
+    }
+    return size;
+}
+
 void * f_malloc(int flags, size_t size)
 {
     struct f_malloc_block * blk = NULL, *last = NULL;
-
-
+    void *ret = NULL;
     while((size % 4) != 0) {
         size++;
     } 
+
+    /* kernelspace calls: pid=0 (kernel, kthreads */
+    if (this_task_getpid() == 0) {
+
+        /* kernel receives a null (no blocking) */
+        if (this_task() == NULL) {
+            if (mutex_trylock(mlock) < 0) {
+                return NULL;
+            }
+        } else {
+            /* ktrheads can block. */
+            mutex_lock(mlock);
+        }
+    }
+    /* Userspace calls acquire mlock in the syscall handler. */
 
     /* update stats */
     f_malloc_stats[MEMPOOL(flags)].malloc_calls++;
@@ -293,8 +403,12 @@ void * f_malloc(int flags, size_t size)
     if (blk)
     {
         dbg_malloc("Found best fit!\n");
+        /*
+         * if ((flags & MEM_USER) && blk->next && ((uint8_t *)blk + 24 + blk->size != (uint8_t *)blk->next))
+         *      while(1);;
+         */
         /* first fit found, now split it if it's much bigger than needed */
-        if (size + (2*sizeof(struct f_malloc_block)) < blk->size)
+        if (2 * (size + sizeof(struct f_malloc_block)) < blk->size)
         {
             dbg_malloc("Splitting blocks, since requested size [%d] << best fit block size [%d]!\n", size, blk->size);
             split_block(blk, size);
@@ -302,8 +416,10 @@ void * f_malloc(int flags, size_t size)
     } else {
         /* No first fit found: ask for new memory */
         blk = (struct f_malloc_block *)f_sbrk(flags, size + sizeof(struct f_malloc_block));  // can OS give us more memory?
-        if ((long)blk == -1)
-            return NULL;
+        if ((long)blk == -1) {
+            ret = NULL;
+            goto out;
+        }
 
         /* first call -> set entrypoint */
         if (malloc_entry[MEMPOOL(flags)] == NULL) {
@@ -324,48 +440,85 @@ void * f_malloc(int flags, size_t size)
 
     /* destination found, fill in  meta-data */
     blk->flags = F_IN_USE | flags;
+    if (flags & MEM_USER)
+        blk->pid = this_task_getpid();
+    else
+        blk->pid = 0;
 
     /* update stats */
     f_malloc_stats[MEMPOOL(flags)].objects_allocated++;
     f_malloc_stats[MEMPOOL(flags)].mem_allocated += ((uint32_t)blk->size + sizeof(struct f_malloc_block));
 
-    return (void *)(((uint8_t *)blk) + sizeof(struct f_malloc_block)); // pointer to newly allocated mem
+    ret = (void *)(((uint8_t *)blk) + sizeof(struct f_malloc_block)); // pointer to newly allocated mem
+
+out:
+    /* Userspace calls release mlock in the syscall handler. */
+    if (this_task_getpid() == 0) {
+        mutex_unlock(mlock);
+    }
+    return ret;
+}
+
+static void blk_rearrange(void *arg)
+{
+    struct f_malloc_block *blk = arg;
+
+
+    /* Merge adjecent free blocks (consecutive blocks are always adjacent) */
+    if ((blk->prev) && (!in_use(blk->prev)))
+    {
+        blk = merge_blocks(blk->prev, blk);
+    }
+    if ((blk->next) && (!in_use(blk->next)))
+    {
+        blk = merge_blocks(blk, blk->next);
+    }
+    if (!blk->next)
+        f_compact(blk);
 }
 
 
 void f_free(void * ptr)
 {
     struct f_malloc_block * blk;
-
-    /* stats */
+    int pid = this_task_getpid();
+    blk = (struct f_malloc_block *)((uint8_t *)ptr - sizeof(struct f_malloc_block));
 
     if (!ptr) {
         return;
     }
-
-    blk = (struct f_malloc_block *)((uint8_t *)ptr - sizeof(struct f_malloc_block));
-    if (blk->magic == F_MALLOC_MAGIC)
+    if (block_valid(blk))
     {
-        if ((blk->flags & F_IN_USE) == 0) {
+        if (!in_use(blk)) {
             task_segfault((uint32_t)ptr, 0, MEMFAULT_DOUBLEFREE);
         }
-
         blk->flags &= ~F_IN_USE;
+
+        /* Userspace task takes mlock in the syscall handler */
+        /* kernelspace calls: pid=0 (kernel, kthreads */
+        if (pid == 0) {
+            /*  kernel task == NULL */
+            if (this_task() == NULL) {
+                if (mutex_trylock(mlock) < 0) {
+                    return;
+                }
+            } else {
+                /* ktrheads can block. */
+                mutex_lock(mlock);
+            }
+        }
+
         /* stats */
         f_malloc_stats[MEMPOOL(blk->flags)].free_calls++;
         f_malloc_stats[MEMPOOL(blk->flags)].objects_allocated--;
         f_malloc_stats[MEMPOOL(blk->flags)].mem_allocated -= (uint32_t)blk->size + sizeof(struct f_malloc_block);
-        /* Merge adjecent free blocks (consecutive blocks are always adjacent */
-        if ((blk->prev) && (!in_use(blk->prev)))
-        {
-            blk = merge_blocks(blk->prev, blk);
+        //if ((blk->flags & MEM_TASK) == 0)
+        //    blk_rearrange(blk);
+
+        /* Userspace tasks release mlock in the syscall handler */
+        if (pid == 0) {
+            mutex_unlock(mlock);
         }
-        if ((blk->next) && (!in_use(blk->next)))
-        {
-            blk = merge_blocks(blk, blk->next);
-        }
-        if (!blk->next)
-            f_compact(blk);
     } else {
         dbg_malloc("FREE ERR: %p is not a valid allocated pointer!\n", blk);
     }
@@ -376,36 +529,92 @@ void f_free(void * ptr)
 uint32_t mem_stats_frag(int pool)
 {
     uint32_t frag_size = 0u;
-    struct f_malloc_block *blk = malloc_entry[pool];
+    struct f_malloc_block *blk;
+        
+    mutex_lock(mlock);    
+    blk = malloc_entry[pool];
     while (blk) {
         if (!in_use(blk)) 
             frag_size += blk->size + sizeof(struct f_malloc_block); 
         blk = blk->next;
     }
+    mutex_unlock(mlock);
     return frag_size;
 }
 
 
-/* Syscalls back-end (for userspace memory call handling) */
-int sys_malloc_hdlr(int size)
+int fmalloc_owner(const void *_ptr)
 {
-    return (int)f_malloc(MEM_USER, size);
+    struct f_malloc_block *blk;
+    uint8_t *ptr = (uint8_t *)_ptr;
+    blk = malloc_entry[MEM_USER];
+
+    while(blk) {
+        uint8_t *mem_start = (uint8_t *)blk + sizeof(struct f_malloc_block);
+        uint8_t *mem_end   = mem_start + blk->size;
+
+
+        if ( (ptr >= mem_start) && (ptr < mem_end) ) {
+            if (block_valid(blk) && in_use(blk)) 
+                return blk->pid;
+            else 
+                return -1;
+        }
+        blk = blk->next;
+    }
+    return -1;
 }
 
-int sys_free_hdlr(int addr)
+int fmalloc_chown(const void *ptr, uint16_t pid)
 {
-    f_free((void *)addr);
+    struct f_malloc_block *blk = (struct f_malloc_block *) ( ((uint8_t *)ptr)  - sizeof(struct f_malloc_block));
+    if (block_valid(blk))
+        blk->pid = pid;
+}
+
+/* Syscalls back-end (for userspace memory call handling) */
+void *sys_malloc_hdlr(int size)
+{
+    void *addr;
+    if (suspend_on_mutex_lock(mlock) < 0)
+        return (void *)SYS_CALL_AGAIN;
+
+    addr = f_malloc(MEM_USER, size);
+#ifdef CONFIG_SRAM_EXTRA
+    if (!addr)
+        addr = f_malloc(MEM_EXTRA, size);
+#endif
+    mutex_unlock(mlock);
+    return addr;
+}
+
+int sys_free_hdlr(void *addr)
+{
+    if (suspend_on_mutex_lock(mlock) < 0)
+        return SYS_CALL_AGAIN;
+    f_free(addr);
+    mutex_unlock(mlock);
     return 0;
 }
 
-int sys_calloc_hdlr(int n, int size)
+void *sys_calloc_hdlr(int n, int size)
 {
-    return (int)f_calloc(MEM_USER, n, size);
+    void *addr;
+    if (suspend_on_mutex_lock(mlock) < 0)
+        return (void *)SYS_CALL_AGAIN;
+    addr = f_calloc(MEM_USER, n, size);
+    mutex_unlock(mlock);
+    return addr;
 }
 
-int sys_realloc_hdlr(int addr, int size)
+void *sys_realloc_hdlr(void *addr, int size)
 {
-    return (int)f_realloc(MEM_USER, (void *)addr, size);
+    void *naddr;
+    if (suspend_on_mutex_lock(mlock) < 0)
+        return (void *)SYS_CALL_AGAIN;
+    naddr = f_realloc(MEM_USER, addr, size);
+    mutex_unlock(mlock);
+    return naddr;
 }
 
 /*------------------*/

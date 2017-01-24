@@ -1,3 +1,23 @@
+/*
+ *      This file is part of frosted.
+ *
+ *      frosted is free software: you can redistribute it and/or modify
+ *      it under the terms of the GNU General Public License version 2, as
+ *      published by the Free Software Foundation.
+ *
+ *
+ *      frosted is distributed in the hope that it will be useful,
+ *      but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *      MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *      GNU General Public License for more details.
+ *
+ *      You should have received a copy of the GNU General Public License
+ *      along with frosted.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *      Authors:
+ *
+ */
+
 #include "frosted.h"
 #include "string.h"
 
@@ -111,19 +131,42 @@ static int memfs_creat(struct fnode *fno)
         return 0;
     }
     return -1;
-    
+
 }
 
 static int memfs_unlink(struct fnode *fno)
 {
     struct memfs_fnode *mfno;
     if (!fno)
-        return -1;
+        return -ENOENT;
     mfno = fno->priv;
     if (mfno && mfno->content)
         kfree(mfno->content);
     kfree(mfno);
     return 0;
+}
+
+static int memfs_truncate(struct fnode *fno, unsigned int newsize)
+{
+    struct memfs_fnode *mfno;
+    if (!fno)
+        return -ENOENT;
+    mfno = fno->priv;
+    if (mfno) {
+        if (fno->size <= newsize) {
+            /* Nothing to do here. */
+            return -EFBIG;
+        }
+        if (newsize == 0) {
+            fno->size = 0;
+            kfree(mfno->content);
+        } else {
+            mfno->content = krealloc(mfno->content, newsize);
+            fno->size = newsize;
+        }
+        return 0;
+    }
+    return -EFAULT;
 }
 
 static int memfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
@@ -144,7 +187,7 @@ static int memfs_mount(char *source, char *tgt, uint32_t flags, void *arg)
         return -1;
     }
 
-    /* TODO: Check empty dir 
+    /* TODO: Check empty dir
     if (tgt_dir->children) {
         return -1;
     }
@@ -160,15 +203,13 @@ void memfs_init(void)
 
     mod_memfs.mount = memfs_mount;
 
-    mod_memfs.ops.read = memfs_read; 
+    mod_memfs.ops.read = memfs_read;
     mod_memfs.ops.poll = memfs_poll;
     mod_memfs.ops.write = memfs_write;
     mod_memfs.ops.seek = memfs_seek;
     mod_memfs.ops.creat = memfs_creat;
     mod_memfs.ops.unlink = memfs_unlink;
     mod_memfs.ops.close = memfs_close;
+    mod_memfs.ops.truncate = memfs_truncate;
     register_module(&mod_memfs);
 }
-
-
-

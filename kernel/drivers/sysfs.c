@@ -1,13 +1,34 @@
+/*
+ *      This file is part of frosted.
+ *
+ *      frosted is free software: you can redistribute it and/or modify
+ *      it under the terms of the GNU General Public License version 2, as
+ *      published by the Free Software Foundation.
+ *
+ *
+ *      frosted is distributed in the hope that it will be useful,
+ *      but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *      MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *      GNU General Public License for more details.
+ *
+ *      You should have received a copy of the GNU General Public License
+ *      along with frosted.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *      Authors:
+ *
+ */
+ 
 #include "frosted.h"
 #include "string.h"
 #include "scheduler.h"
+#include "gpio.h"
 
-#define MAX_SYSFS_BUFFER 512
+#define MAX_SYSFS_BUFFER 1024
 
 static struct fnode *sysfs;
 static struct module mod_sysfs;
 
-static frosted_mutex_t *sysfs_mutex = NULL;
+static mutex_t *sysfs_mutex = NULL;
 
 extern struct mountpoint *MTAB;
 extern struct f_malloc_stats f_malloc_stats[3];
@@ -16,13 +37,13 @@ extern struct f_malloc_stats f_malloc_stats[3];
 void sysfs_lock(void)
 {
     if (sysfs_mutex)
-        frosted_mutex_lock(sysfs_mutex);
+        mutex_lock(sysfs_mutex);
 }
 
 void sysfs_unlock(void)
 {
     if (sysfs_mutex)
-        frosted_mutex_unlock(sysfs_mutex);
+        mutex_unlock(sysfs_mutex);
 }
 
 static int sysfs_read(struct fnode *fno, void *buf, unsigned int len)
@@ -75,7 +96,7 @@ static int sysfs_close(struct fnode *fno)
     return 0;
 }
 
-static int ul_to_str(unsigned long n, char *s)
+int ul_to_str(unsigned long n, char *s)
 {
     int maxlen = 10;
     int i;
@@ -104,7 +125,43 @@ static int ul_to_str(unsigned long n, char *s)
         q /= 10;
     }
     return maxlen;
-     
+}
+
+
+int nice_to_str(int8_t n, char *s)
+{
+    int i = 0;
+    if (n == 0) {
+        s[0] = '0';
+        s[1] = '\n';
+        return 1;
+    }
+
+    if (n == NICE_RT) {
+        s[0] = 'R';
+        s[1] = 'T';
+        s[2] = '\0';
+        return 2;
+    }
+
+    if (n < 0) {
+        s[i++] = '-';
+        n = 0 - n;
+    }
+    if (n > 20) {
+        s[0] = 'E';
+        s[1] = 'R';
+        s[2] = 'R';
+        s[3] = '\0';
+        return 3;
+    }
+
+    if (n >= 10) {
+        s[i++] = (n / 10) + '0';
+    }
+    s[i++] = (n % 10) + '0';
+    s[i++] = '\0';
+    return (i - 1);
 }
 
 int sysfs_time_read(struct sysfs_fnode *sfs, void *buf, int len)
@@ -121,6 +178,217 @@ int sysfs_time_read(struct sysfs_fnode *sfs, void *buf, int len)
     return fno->off;
 }
 
+
+static int gpio_basename(const uint32_t base, char *name)
+{
+    switch(base) {
+#if defined(STM32F4) || defined(STM32F7)
+        case GPIOA: 
+            strcpy(name,"GPIOA");
+            return 5;
+        case GPIOB: 
+            strcpy(name,"GPIOB");
+            return 5;
+        case GPIOC: 
+            strcpy(name,"GPIOC");
+            return 5;
+        case GPIOD: 
+            strcpy(name,"GPIOD");
+            return 5;
+        case GPIOE: 
+            strcpy(name,"GPIOE");
+            return 5;
+        case GPIOF: 
+            strcpy(name,"GPIOF");
+            return 5;
+        case GPIOG: 
+            strcpy(name,"GPIOG");
+            return 5;
+        case GPIOH: 
+            strcpy(name,"GPIOH");
+            return 5;
+        case GPIOI: 
+            strcpy(name,"GPIOI");
+            return 5;
+        case GPIOJ: 
+            strcpy(name,"GPIOJ");
+            return 5;
+        case GPIOK: 
+            strcpy(name,"GPIOK");
+            return 5;
+#endif
+        default:
+            strcpy(name,"N/A");
+            return 3;
+    }
+}
+
+#if defined(STM32F4) || defined(STM32F7)
+int sysfs_pins_read(struct sysfs_fnode *sfs, void *buf, int len)
+{
+    char *res = (char *)buf;
+    struct fnode *fno = sfs->fnode;
+    static char *txt;
+    static int off;
+    int i;
+    int stack_used;
+    char *name;
+    int p_state;
+    int nice;
+    const char legend[]="Base\tPin\tMode\tDrive\tSpeed\tTrigger\tOwner\r\n";
+    struct dev_gpio *g =  Gpio_list;
+    uint32_t pin_n = 0;
+    if (fno->off == 0) {
+        mutex_lock(sysfs_mutex);
+        txt = kalloc((1 + gpio_list_len()) * 80);
+        if (!txt)
+            return -1;
+        off = 0;
+
+        strcpy(txt, legend);
+        off += strlen(legend);
+        while (g) {
+
+            /* Base */
+            off += gpio_basename(g->base, txt + off);
+            txt[off++] = '\t';
+            
+            /* Pin */
+            pin_n = 0;
+            while ((1 << pin_n) != g->pin)
+                pin_n ++;
+            off += ul_to_str(pin_n, txt + off);
+            txt[off++] = '\t';
+
+            /* Mode */
+            switch (g->mode) {
+                case GPIO_MODE_OUTPUT:
+                    txt[off++] = 'O';
+                    txt[off++] = 'U';
+                    txt[off++] = 'T';
+                    break;
+                case GPIO_MODE_INPUT:
+                    txt[off++] = 'I';
+                    txt[off++] = 'N';
+                    break;
+                case GPIO_MODE_ANALOG:
+                    txt[off++] = 'A';
+                    txt[off++] = 'N';
+                    txt[off++] = 'A';
+                    txt[off++] = 'L';
+                    txt[off++] = 'O';
+                    txt[off++] = 'G';
+                    break;
+                case GPIO_MODE_AF:
+                    txt[off++] = 'A';
+                    txt[off++] = 'L';
+                    txt[off++] = 'T';
+                    off += ul_to_str(g->af, txt + off);
+                    break;
+            }
+            txt[off++] = '\t';
+
+            /* Drive */
+            if (g->optype == GPIO_OTYPE_OD) {
+                txt[off++] = 'O';
+                txt[off++] = 'D';
+                txt[off++] = 'r';
+                txt[off++] = 'a';
+                txt[off++] = 'i';
+                txt[off++] = 'n';
+            } else {
+                switch(g->pullupdown) {
+                    case GPIO_PUPD_PULLUP:
+                        txt[off++] = 'P';
+                        txt[off++] = 'u';
+                        txt[off++] = 'l';
+                        txt[off++] = 'l';
+                        txt[off++] = 'U';
+                        txt[off++] = 'p';
+                        break;
+                    case GPIO_PUPD_PULLDOWN:
+                        txt[off++] = 'P';
+                        txt[off++] = 'u';
+                        txt[off++] = 'l';
+                        txt[off++] = 'l';
+                        txt[off++] = 'D';
+                        txt[off++] = 'w';
+                        break;
+                    default:
+                        txt[off++] = 'N';
+                        txt[off++] = 'o';
+                        txt[off++] = 'n';
+                        txt[off++] = 'e';
+                        break;
+                }
+            } 
+            txt[off++] = '\t';
+
+
+            /* Speed */
+            /* FIXME: if you want to see output speed. */
+            txt[off++] = '-';
+            txt[off++] = '\t';
+
+            /* Trigger */
+            switch (g->trigger) {
+
+                case GPIO_TRIGGER_RAISE:
+                    txt[off++] = 'R';
+                    txt[off++] = 'a';
+                    txt[off++] = 'i';
+                    txt[off++] = 's';
+                    txt[off++] = 'e';
+                    break;
+
+                case GPIO_TRIGGER_FALL:
+                    txt[off++] = 'F';
+                    txt[off++] = 'a';
+                    txt[off++] = 'l';
+                    txt[off++] = 'l';
+                    break;
+
+                case GPIO_TRIGGER_TOGGLE:
+                    txt[off++] = 'T';
+                    txt[off++] = 'o';
+                    txt[off++] = 'g';
+                    txt[off++] = 'g';
+                    txt[off++] = 'l';
+                    txt[off++] = 'e';
+                    break;
+
+                default:
+                    txt[off++] = 'N';
+                    txt[off++] = 'o';
+                    txt[off++] = 'n';
+                    txt[off++] = 'e';
+                    break;
+            }
+            txt[off++] = '\t';
+
+            /* Owner's name */
+            strcpy(txt + off, g->owner->name);
+            off += strlen(g->owner->name);
+            txt[off++] = '\r';
+            txt[off++] = '\n';
+            g = g->next;
+        }
+        txt[off++] = '\0';
+    }
+    if (off == fno->off) {
+        kfree(txt);
+        mutex_unlock(sysfs_mutex);
+        return -1;
+    }
+    if (len > (off - fno->off)) {
+       len = off - fno->off;
+    }
+    memcpy(res, txt + fno->off, len);
+    fno->off += len;
+    return len;
+}
+#endif
+
 int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
 {
     char *res = (char *)buf;
@@ -131,9 +399,10 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
     int stack_used;
     char *name;
     int p_state;
-    const char legend[]="pid\tstate\tstack\tname\r\n";
+    int nice;
+    const char legend[]="pid\tstate\tstack\theap\tnice\tname\r\n";
     if (fno->off == 0) {
-        frosted_mutex_lock(sysfs_mutex);
+        mutex_lock(sysfs_mutex);
         task_txt = kalloc(MAX_SYSFS_BUFFER);
         if (!task_txt)
             return -1;
@@ -142,7 +411,7 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
         strcpy(task_txt, legend);
         off += strlen(legend);
 
-        for (i = 1; i < MAX_SYSFS_BUFFER; i++) {
+        for (i = 1; i <= 0xFFFF; i++) {
             p_state = scheduler_task_state(i);
             if ((p_state != TASK_IDLE) && (p_state != TASK_OVER)) {
                 off += ul_to_str(i, task_txt + off);
@@ -157,10 +426,20 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
                     task_txt[off++] = 'F';
                 if (p_state == TASK_ZOMBIE)
                     task_txt[off++] = 'Z';
-                
+                if (p_state == TASK_STOPPED)
+                    task_txt[off++] = 'S';
+
                 task_txt[off++] = '\t';
                 stack_used = scheduler_stack_used(i);
                 off += ul_to_str(stack_used, task_txt + off);
+                
+                task_txt[off++] = '\t';
+                stack_used = f_proc_heap_count(i);
+                off += ul_to_str(stack_used, task_txt + off);
+                
+                task_txt[off++] = '\t';
+                nice = scheduler_get_nice(i);
+                off += nice_to_str(nice, task_txt + off);
 
                 task_txt[off++] = '\t';
                 name = scheduler_task_name(i);
@@ -178,7 +457,7 @@ int sysfs_tasks_read(struct sysfs_fnode *sfs, void *buf, int len)
     }
     if (off == fno->off) {
         kfree(task_txt);
-        frosted_mutex_unlock(sysfs_mutex);
+        mutex_unlock(sysfs_mutex);
         return -1;
     }
     if (len > (off - fno->off)) {
@@ -218,7 +497,7 @@ int sysfs_mem_read(struct sysfs_fnode *sfs, void *buf, int len)
         const char mem_banner[] = "\tMemory in use: ";
         const char frags_banner[] = "\tReserved: ";
         int i;
-        frosted_mutex_lock(sysfs_mutex);
+        mutex_lock(sysfs_mutex);
         mem_txt = kalloc(MAX_SYSFS_BUFFER);
         if (!mem_txt)
             return -1;
@@ -231,34 +510,34 @@ int sysfs_mem_read(struct sysfs_fnode *sfs, void *buf, int len)
             strcpy(mem_txt + off, malloc_banner);
             off += strlen(malloc_banner);
             off += ul_to_str(allocated, mem_txt + off);
-            *(mem_txt + off) = '\r'; 
+            *(mem_txt + off) = '\r';
             off++;
-            *(mem_txt + off) = '\n'; 
+            *(mem_txt + off) = '\n';
             off++;
 
             strcpy(mem_txt + off, mem_banner);
             off += strlen(mem_banner);
             off += ul_to_str(f_malloc_stats[i].mem_allocated, mem_txt + off);
 
-            *(mem_txt + off) = ' '; 
+            *(mem_txt + off) = ' ';
             off++;
-            *(mem_txt + off) = 'B'; 
+            *(mem_txt + off) = 'B';
             off++;
-            *(mem_txt + off) = '\r'; 
+            *(mem_txt + off) = '\r';
             off++;
-            *(mem_txt + off) = '\n'; 
+            *(mem_txt + off) = '\n';
             off++;
 
             strcpy(mem_txt + off, frags_banner);
             off += strlen(frags_banner);
             off += ul_to_str(mem_stats_frag(i), mem_txt + off);
-            *(mem_txt + off) = ' '; 
+            *(mem_txt + off) = ' ';
             off++;
-            *(mem_txt + off) = 'B'; 
+            *(mem_txt + off) = 'B';
             off++;
-            *(mem_txt + off) = '\r'; 
+            *(mem_txt + off) = '\r';
             off++;
-            *(mem_txt + off) = '\n'; 
+            *(mem_txt + off) = '\n';
             off++;
         }
         if (off > 0)
@@ -266,7 +545,7 @@ int sysfs_mem_read(struct sysfs_fnode *sfs, void *buf, int len)
     }
     if (off == fno->off) {
         kfree(mem_txt);
-        frosted_mutex_unlock(sysfs_mutex);
+        mutex_unlock(sysfs_mutex);
         return -1;
     }
     if (len > (off - fno->off)) {
@@ -289,7 +568,7 @@ int sysfs_modules_read(struct sysfs_fnode *sfs, void *buf, int len)
     struct module *m = MODS;
     if (fno->off == 0) {
         const char mod_banner[] = "Loaded modules:\r\n";
-        frosted_mutex_lock(sysfs_mutex);
+        mutex_lock(sysfs_mutex);
         mem_txt = kalloc(MAX_SYSFS_BUFFER);
         if (!mem_txt)
             return -1;
@@ -307,7 +586,7 @@ int sysfs_modules_read(struct sysfs_fnode *sfs, void *buf, int len)
     }
     if (off == fno->off) {
         kfree(mem_txt);
-        frosted_mutex_unlock(sysfs_mutex);
+        mutex_unlock(sysfs_mutex);
         return -1;
     }
     if (len > (off - fno->off)) {
@@ -331,7 +610,7 @@ int sysfs_mtab_read(struct sysfs_fnode *sfs, void *buf, int len)
     int l = 0;
     if (fno->off == 0) {
         const char mtab_banner[] = "Mountpoint\tDriver\t\tInfo\r\n--------------------------------------\r\n";
-        frosted_mutex_lock(sysfs_mutex);
+        mutex_lock(sysfs_mutex);
         mem_txt = kalloc(MAX_SYSFS_BUFFER);
         if (!mem_txt)
             return -1;
@@ -342,7 +621,7 @@ int sysfs_mtab_read(struct sysfs_fnode *sfs, void *buf, int len)
         while (m) {
             l = fno_fullpath(m->target, mem_txt + off, MAX_SYSFS_BUFFER - off);
             if (l > 0)
-                off += l; 
+                off += l;
             *(mem_txt + (off++)) = '\t';
             *(mem_txt + (off++)) = '\t';
 
@@ -373,7 +652,7 @@ int sysfs_mtab_read(struct sysfs_fnode *sfs, void *buf, int len)
     }
     if (off == fno->off) {
         kfree(mem_txt);
-        frosted_mutex_unlock(sysfs_mutex);
+        mutex_unlock(sysfs_mutex);
         return -1;
     }
     if (len > (off - fno->off)) {
@@ -390,15 +669,15 @@ int sysfs_no_write(struct sysfs_fnode *sfs, const void *buf, int len)
 }
 
 
-int sysfs_register(char *name, char *dir, 
-        int (*do_read)(struct sysfs_fnode *sfs, void *buf, int len), 
+int sysfs_register(char *name, char *dir,
+        int (*do_read)(struct sysfs_fnode *sfs, void *buf, int len),
         int (*do_write)(struct sysfs_fnode *sfs, const void *buf, int len) )
 {
     struct fnode *fno = fno_create(&mod_sysfs, name, fno_search(dir));
     struct sysfs_fnode *mfs;
     if (!fno)
         return -1;
-   
+
     mfs = kalloc(sizeof(struct sysfs_fnode));
     if (mfs) {
         mfs->fnode = fno;
@@ -428,7 +707,7 @@ static int sysfs_mount(char *source, char *tgt, uint32_t flags, void *args)
         return -1;
     }
 
-    /* TODO: check empty dir 
+    /* TODO: check empty dir
     if (tgt_dir->children) {
         return -1;
     }
@@ -439,6 +718,9 @@ static int sysfs_mount(char *source, char *tgt, uint32_t flags, void *args)
     sysfs_register("mem", "/sys", sysfs_mem_read, sysfs_no_write);
     sysfs_register("modules", "/sys", sysfs_modules_read, sysfs_no_write);
     sysfs_register("mtab", "/sys", sysfs_mtab_read, sysfs_no_write);
+#if defined(STM32F4) || defined(STM32F7)
+    sysfs_register("pins", "/sys", sysfs_pins_read, sysfs_no_write);
+#endif
     return 0;
 }
 
@@ -449,14 +731,13 @@ void sysfs_init(void)
 
     mod_sysfs.mount = sysfs_mount;
 
-    mod_sysfs.ops.read = sysfs_read; 
+    mod_sysfs.ops.read = sysfs_read;
     mod_sysfs.ops.poll = sysfs_poll;
     mod_sysfs.ops.write = sysfs_write;
     mod_sysfs.ops.close = sysfs_close;
 
     sysfs = fno_search("/sys");
     register_module(&mod_sysfs);
-    fno_mkdir(&mod_sysfs, "net", sysfs);            
-    sysfs_mutex = frosted_mutex_init();
+    fno_mkdir(&mod_sysfs, "net", sysfs);
+    sysfs_mutex = mutex_init();
 }
-

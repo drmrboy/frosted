@@ -1,164 +1,175 @@
+/*
+ *      This file is part of frosted.
+ *
+ *      frosted is free software: you can redistribute it and/or modify
+ *      it under the terms of the GNU General Public License version 2, as
+ *      published by the Free Software Foundation.
+ *
+ *
+ *      frosted is distributed in the hope that it will be useful,
+ *      but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *      MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *      GNU General Public License for more details.
+ *
+ *      You should have received a copy of the GNU General Public License
+ *      along with frosted.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ *      Authors:
+ *
+ */
+
 #include "frosted.h"
 #include "device.h"
 #include <stdint.h>
 #include "ioctl.h"
 #include "lsm303dlhc.h"
-#include "lsm303dlhc_ioctl.h"
 #include "gpio.h"
-#include "stm32f4_exti.h"
-#include "stm32f4_dma.h"
+#include "exti.h"
+#include "dma.h"
 #include "i2c.h"
 
-typedef enum
-{
-    LSM303DLHC_IDLE,
-    LSM303DLHC_READ,
-    LSM303DLHC_WRITE,
-}LSM303DLHC_MODE;
+#define LSM303_I2C_INS_ADDR     0x30
+#define LSM303_I2C_COMPASS_ADDR 0x3C
 
-struct dev_lsm303dlhc {
-    struct device * dev;
-    struct fnode *i2c_fnode;
-    struct fnode *int_1_fnode;
-    struct fnode *int_2_fnode;
-    struct fnode *drdy_fnode;
-    uint8_t address;
-    LSM303DLHC_MODE mode;
+
+enum lsm303_state {
+    LSM303_STATE_DISABLED = 0,
+    LSM303_STATE_IDLE,
+    LSM303_STATE_BUSY,
+    LSM303_STATE_RX_RDY
 };
 
-#define MAX_LSM303DLHC 2 
-
-static struct dev_lsm303dlhc DEV_LSM303DLHC[MAX_LSM303DLHC];
+struct dev_lsm303dlhc {
+    struct i2c_slave i2c; /* As first argument, so isr callbacks will use this as arg */
+    struct device * dev;
+    enum lsm303_state state;
+    union dev_lsm303dlhc_data {
+        uint8_t data[6];
+        struct __attribute__((packed)) ins_data_xyz {
+            int16_t x;
+            int16_t y;
+            int16_t z;
+        } xyz;
+    } ins_data;
+} INS;
 
 static int devlsm303dlhc_read(struct fnode *fno, void *buf, unsigned int len);
-static int devlsm303dlhc_ioctl(struct fnode * fno, const uint32_t cmd, void *arg);
 static int devlsm303dlhc_close(struct fnode *fno);
 
 static struct module mod_devlsm303dlhc = {
     .family = FAMILY_FILE,
     .name = "lsm303dlhc",
     .ops.open = device_open,
-    .ops.read = devlsm303dlhc_read, 
-    .ops.ioctl = devlsm303dlhc_ioctl,
+    .ops.read = devlsm303dlhc_read,
     .ops.close = devlsm303dlhc_close,
 };
 
-static void completion(void * arg)
+
+/* I2C operation callbacks, executed in IRQ context, and with I2C mutex held. */
+static void isr_tx(struct i2c_slave * arg)
 {
-    const struct dev_lsm303dlhc *lsm303dlhc = (struct dev_lsm303dlhc *) arg;
-    
-    if (lsm303dlhc->dev->pid > 0) 
-        task_resume(lsm303dlhc->dev->pid);
-}
-
-
-static void int1_callback(void * arg)
-{
-    const struct dev_lsm303dlhc *lsm303dlhc = (struct dev_lsm303dlhc *) arg;
-
-}
-
-static void int2_callback(void * arg)
-{
-    const struct dev_lsm303dlhc *lsm303dlhc = (struct dev_lsm303dlhc *) arg;
-
-}
-
-static void drdy_callback(void * arg)
-{
-    const struct dev_lsm303dlhc *lsm303dlhc = (struct dev_lsm303dlhc *) arg;
-
-}
-
-
-static int devlsm303dlhc_ioctl(struct fnode * fno, const uint32_t cmd, void *arg)
-{
-    struct dev_lsm303dlhc *lsm303dlhc = FNO_MOD_PRIV(fno, &mod_devlsm303dlhc);
-    struct lsm303dlhc_ctrl_reg * ctrl = (struct lsm303dlhc_ctrl_reg *) arg;
-    static uint8_t buffer;
-
-    if (!lsm303dlhc)
-        return -1;
-
-    if(lsm303dlhc->mode == LSM303DLHC_IDLE)
-    {
-        lsm303dlhc->dev->pid = scheduler_get_cur_pid();
-        task_suspend();
-
-        if(cmd == IOCTL_LSM303DLHC_READ_CTRL_REG)
-        {
-            lsm303dlhc->mode = LSM303DLHC_READ;
-            i2c_read(lsm303dlhc->i2c_fnode, completion, lsm303dlhc, lsm303dlhc->address, ctrl->reg, &buffer, 1);
-        }
-        else
-        {
-            buffer = ctrl->data;
-            lsm303dlhc->mode = LSM303DLHC_WRITE;
-            i2c_write(lsm303dlhc->i2c_fnode, completion, lsm303dlhc, lsm303dlhc->address, ctrl->reg, &buffer, 1);
-        }
-
-        return SYS_CALL_AGAIN;
+    struct dev_lsm303dlhc *lsm303dlhc = (struct dev_lsm303dlhc *) arg;
+    switch (lsm303dlhc->state) {
+        case LSM303_STATE_DISABLED:
+            lsm303dlhc->state = LSM303_STATE_IDLE;
+            task_resume(lsm303dlhc->dev->task);
+            break;
+        case LSM303_STATE_IDLE:
+            lsm303dlhc->state = LSM303_STATE_DISABLED;
+            break;
     }
-
-    if(lsm303dlhc->mode == LSM303DLHC_READ)
-    {
-        ctrl->data = buffer;
-    }
-    lsm303dlhc->mode = LSM303DLHC_IDLE;
-
-    return 0;
 }
+
+static void isr_rx(struct i2c_slave * arg)
+{
+    struct dev_lsm303dlhc *lsm303dlhc = (struct dev_lsm303dlhc *) arg;
+    lsm303dlhc->state = LSM303_STATE_RX_RDY;
+    if (lsm303dlhc->dev->task != NULL)
+        task_resume(lsm303dlhc->dev->task);
+}
+
+
+static void int1_callback(void *arg)
+{
+    (void*)arg;
+}
+
+static void int2_callback(void *arg)
+{
+    (void*)arg;
+}
+
+static void drdy_callback(void *arg)
+{
+    (void*)arg;
+}
+
+
+#define CTRL_REG1_A (0x20)
+#define OUT_X_L_A   (0x28)
 
 static int devlsm303dlhc_read(struct fnode *fno, void *buf, unsigned int len)
 {
-    int i;
-    char *ch = (char *)buf;
-    const struct dev_lsm303dlhc *lsm303dlhc;
+    struct dev_lsm303dlhc *lsm303dlhc = FNO_MOD_PRIV(fno, &mod_devlsm303dlhc);
+    uint8_t val;
 
-    if (len <= 0)
-        return len;
-
-    lsm303dlhc = FNO_MOD_PRIV(fno, &mod_devlsm303dlhc);
     if (!lsm303dlhc)
-        return -1;
+        return -EINVAL;
+    if (len == 0)
+        return -EINVAL;
 
+    switch (lsm303dlhc->state) {
+        case LSM303_STATE_DISABLED:
+            lsm303dlhc->dev->task = this_task();
+            val = 0x27; /* PM=001, DR=00, XYZ=111 */
+            i2c_init_write(&lsm303dlhc->i2c, CTRL_REG1_A, &val, 1);
+            task_suspend();
+            return SYS_CALL_AGAIN;
+        case LSM303_STATE_IDLE:
+            lsm303dlhc->dev->task = this_task();
+            i2c_init_write(&lsm303dlhc->i2c, OUT_X_L_A, lsm303dlhc->ins_data.data, 6);
+            task_suspend();
+            return SYS_CALL_AGAIN;
 
-    i2c_read(lsm303dlhc->i2c_fnode, completion, (void*)lsm303dlhc, lsm303dlhc->address, 0, buf, len);
-
-    return SYS_CALL_AGAIN;
-
-
-    return len;
+        case LSM303_STATE_RX_RDY:
+            if (len > 6)
+                len = 6;
+            memcpy(buf, lsm303dlhc->ins_data.data, len);
+            lsm303dlhc->state = LSM303_STATE_IDLE;
+            val = 0x07; /* PM=000, DR=00, XYZ=111 */
+            i2c_init_write(&lsm303dlhc->i2c, CTRL_REG1_A, &val, 1);
+            return len;
+    }
 }
+
 static int devlsm303dlhc_close(struct fnode *fno)
 {
+    struct dev_lsm303dlhc *lsm303dlhc = FNO_MOD_PRIV(fno, &mod_devlsm303dlhc);
+    uint8_t val = 0x07; /* PM=000, DR=00, XYZ=111 */
+    lsm303dlhc->state = LSM303_STATE_IDLE;
+    i2c_init_write(&lsm303dlhc->i2c, CTRL_REG1_A, &val, 1);
     return 0;
 }
 
-
-static void lsm303dlhc_fno_init(struct fnode *dev, uint32_t n, const struct lsm303dlhc_addr * addr)
+int lsm303dlhc_init(int bus)
 {
-    struct dev_lsm303dlhc *l = &DEV_LSM303DLHC[n];
-    l->dev = device_fno_init(&mod_devlsm303dlhc, addr->name, dev, FL_RDWR, l);
-    l->i2c_fnode = fno_search(addr->i2c_name);
-    (addr->int_1_name) ? l->int_1_fnode = fno_search(addr->int_1_name) : NULL;
-    (addr->int_2_name) ? l->int_2_fnode = fno_search(addr->int_2_name) : NULL;
-    (addr->drdy_name) ? l->drdy_fnode = fno_search(addr->drdy_name) : NULL;
-    l->address = addr->address;
-    l->mode = LSM303DLHC_IDLE;
-    
-    if(l->int_1_fnode)exti_register_callback(l->int_1_fnode, int1_callback, l);
-    if(l->int_2_fnode)exti_register_callback(l->int_2_fnode, int2_callback, l);
-    if(l->drdy_fnode)exti_register_callback(l->drdy_fnode, drdy_callback, l);
-}
+    struct fnode *devfs;
+    memset(&INS, 0, sizeof(struct dev_lsm303dlhc));
 
-void lsm303dlhc_init(struct fnode *dev, const struct lsm303dlhc_addr lsm303dlhc_addrs[], int num_lsm303dlhc)
-{
-    int i;
-    for (i = 0; i < num_lsm303dlhc; i++) 
-    {
-        lsm303dlhc_fno_init(dev, i, &lsm303dlhc_addrs[i]);
-    }
+    devfs = fno_search("/dev");
+    if (!devfs)
+        return -EFAULT;
+
+    INS.dev = device_fno_init(&mod_devlsm303dlhc, "ins", devfs, FL_RDONLY, &INS);
+    if (!INS.dev)
+        return -EFAULT;
+
+    /* Populate i2c_slave struct */
+    INS.i2c.bus = bus;
+    INS.i2c.address = LSM303_I2C_INS_ADDR;
+    INS.i2c.isr_tx = isr_tx;
+    INS.i2c.isr_rx = isr_rx;
+
     register_module(&mod_devlsm303dlhc);
+    return 0;
 }
-

@@ -5,8 +5,8 @@
 
 struct device {
     struct fnode *fno;
-    frosted_mutex_t * mutex;
-    uint16_t pid;
+    mutex_t * mutex;
+    struct task *task;
 };
 
 int device_open(const char *path, int flags);
